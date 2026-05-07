@@ -1,0 +1,2076 @@
+================================================================================
+ACTIONBENCHAI — FRONTEND SOURCE CODE
+================================================================================
+
+================================================================================
+FILE: artifacts/judge-ai/index.html
+================================================================================
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <title>ActionBenchAI — Court Judgment Intelligence</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+================================================================================
+FILE: artifacts/judge-ai/src/main.tsx
+================================================================================
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./index.css";
+import { setAuthTokenGetter } from "@workspace/api-client-react";
+
+setAuthTokenGetter(() => localStorage.getItem("jwt_token"));
+
+createRoot(document.getElementById("root")!).render(<App />);
+
+================================================================================
+FILE: artifacts/judge-ai/src/App.tsx
+================================================================================
+import { Switch, Route, Router as WouterRouter } from "wouter";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider, useAuth } from "@/contexts/auth";
+import NotFound from "@/pages/not-found";
+import Login from "@/pages/login";
+import Upload from "@/pages/upload";
+import VerifyQueue from "@/pages/verify-queue";
+import VerifyDetail from "@/pages/verify-detail";
+import Dashboard from "@/pages/dashboard";
+import { useLocation } from "wouter";
+import { useEffect } from "react";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 1, refetchOnWindowFocus: false },
+  },
+});
+
+function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: string[] }) {
+  const { user, isLoading, token } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && !token) {
+      setLocation("/login");
+    }
+    if (!isLoading && user && allowedRoles && !allowedRoles.includes(user.role)) {
+      setLocation("/dashboard");
+    }
+  }, [isLoading, token, user, allowedRoles]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-muted-foreground text-sm">Loading...</div>
+      </div>
+    );
+  }
+  if (!token) return null;
+  if (allowedRoles && user && !allowedRoles.includes(user.role)) return null;
+  return <>{children}</>;
+}
+
+function Router() {
+  return (
+    <Switch>
+      <Route path="/login" component={Login} />
+      <Route path="/upload">
+        <ProtectedRoute allowedRoles={["UPLOADER"]}>
+          <Upload />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/verify/:id">
+        {(params) => (
+          <ProtectedRoute allowedRoles={["REVIEWER"]}>
+            <VerifyDetail id={parseInt(params.id, 10)} />
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/verify">
+        <ProtectedRoute allowedRoles={["REVIEWER"]}>
+          <VerifyQueue />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/dashboard">
+        <ProtectedRoute>
+          <Dashboard />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/">
+        <ProtectedRoute>
+          <Dashboard />
+        </ProtectedRoute>
+      </Route>
+      <Route component={NotFound} />
+    </Switch>
+  );
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+          <AuthProvider>
+            <Router />
+          </AuthProvider>
+        </WouterRouter>
+        <Toaster />
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+}
+
+export default App;
+
+================================================================================
+FILE: artifacts/judge-ai/src/index.css
+================================================================================
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-border: hsl(var(--card-border));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-popover-border: hsl(var(--popover-border));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-border: var(--primary-border);
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-secondary-border: var(--secondary-border);
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-muted-border: var(--muted-border);
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-accent-border: var(--accent-border);
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-destructive-border: var(--destructive-border);
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-primary-border: var(--sidebar-primary-border);
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-accent-border: var(--sidebar-accent-border);
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  --font-sans: var(--app-font-sans);
+  --font-serif: var(--app-font-serif);
+  --font-mono: var(--app-font-mono);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* LIGHT MODE */
+:root {
+  --button-outline: rgba(0,0,0, .10);
+  --badge-outline: rgba(0,0,0, .05);
+  --opaque-button-border-intensity: -8;
+  --elevate-1: rgba(0,0,0, .03);
+  --elevate-2: rgba(0,0,0, .08);
+
+  /* Primary: #1a3c6e */
+  --primary: 218 61% 26%;
+  --primary-foreground: 0 0% 100%;
+  
+  /* Accent/Warning: #f59e0b */
+  --warning: 38 92% 50%;
+  --warning-foreground: 0 0% 100%;
+  
+  /* Success: #16a34a */
+  --success: 142 71% 36%;
+  --success-foreground: 0 0% 100%;
+  
+  /* Danger: #dc2626 */
+  --destructive: 0 72% 50%;
+  --destructive-foreground: 0 0% 100%;
+
+  --background: 210 20% 98%;
+  --foreground: 222 47% 11%;
+  
+  --border: 214 32% 91%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 214 32% 91%;
+  
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: 214 32% 91%;
+  --sidebar-primary: 218 61% 26%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 210 40% 96%;
+  --sidebar-accent-foreground: 222 47% 11%;
+  --sidebar-ring: 218 61% 26%;
+  
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 214 32% 91%;
+  
+  --secondary: 210 40% 96%;
+  --secondary-foreground: 222 47% 11%;
+  
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  
+  --accent: 210 40% 96%;
+  --accent-foreground: 222 47% 11%;
+  
+  --input: 214 32% 91%;
+  --ring: 218 61% 26%;
+  
+  --chart-1: 218 61% 26%;
+  --chart-2: 38 92% 50%;
+  --chart-3: 142 71% 36%;
+  --chart-4: 0 72% 50%;
+  --chart-5: 222 47% 11%;
+
+  --app-font-sans: 'Inter', sans-serif;
+  --app-font-serif: Georgia, serif;
+  --app-font-mono: Menlo, monospace;
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: 222 47% 11%;
+  --foreground: 210 40% 98%;
+  --border: 217 32% 17%;
+  --card: 222 47% 11%;
+  --card-foreground: 210 40% 98%;
+  --card-border: 217 32% 17%;
+  --primary: 218 61% 40%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 217 32% 17%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217 32% 17%;
+  --muted-foreground: 215 20% 65%;
+  --accent: 217 32% 17%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62% 30%;
+  --destructive-foreground: 210 40% 98%;
+  --warning: 38 92% 30%;
+  --warning-foreground: 210 40% 98%;
+  --success: 142 71% 25%;
+  --success-foreground: 210 40% 98%;
+  --input: 217 32% 17%;
+  --ring: 218 61% 40%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/lib/utils.ts
+================================================================================
+import { clsx, type ClassValue } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/contexts/auth.tsx
+================================================================================
+import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { useGetMe, getGetMeQueryKey, type User } from "@workspace/api-client-react";
+import { useLocation } from "wouter";
+
+interface AuthContextType {
+  user: User | null;
+  isLoading: boolean;
+  token: string | null;
+  setToken: (token: string | null) => void;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [token, setTokenState] = useState<string | null>(() => localStorage.getItem("jwt_token"));
+  const [, setLocation] = useLocation();
+
+  const setToken = (newToken: string | null) => {
+    if (newToken) {
+      localStorage.setItem("jwt_token", newToken);
+    } else {
+      localStorage.removeItem("jwt_token");
+    }
+    setTokenState(newToken);
+  };
+
+  const logout = () => {
+    setToken(null);
+    setLocation("/login");
+  };
+
+  const { data: user, isLoading, isError } = useGetMe({
+    query: {
+      queryKey: getGetMeQueryKey(),
+      enabled: !!token,
+      retry: false,
+    }
+  });
+
+  useEffect(() => {
+    if (isError) {
+      logout();
+    }
+  }, [isError]);
+
+  return (
+    <AuthContext.Provider value={{ user: user || null, isLoading, token, setToken, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/hooks/use-mobile.tsx
+================================================================================
+import * as React from "react"
+
+const MOBILE_BREAKPOINT = 768
+
+export function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
+
+  React.useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+    const onChange = () => {
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    }
+    mql.addEventListener("change", onChange)
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    return () => mql.removeEventListener("change", onChange)
+  }, [])
+
+  return !!isMobile
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/hooks/use-toast.ts
+================================================================================
+import * as React from "react"
+
+import type {
+  ToastActionElement,
+  ToastProps,
+} from "@/components/ui/toast"
+
+const TOAST_LIMIT = 1
+const TOAST_REMOVE_DELAY = 1000000
+
+type ToasterToast = ToastProps & {
+  id: string
+  title?: React.ReactNode
+  description?: React.ReactNode
+  action?: ToastActionElement
+}
+
+const actionTypes = {
+  ADD_TOAST: "ADD_TOAST",
+  UPDATE_TOAST: "UPDATE_TOAST",
+  DISMISS_TOAST: "DISMISS_TOAST",
+  REMOVE_TOAST: "REMOVE_TOAST",
+} as const
+
+let count = 0
+
+function genId() {
+  count = (count + 1) % Number.MAX_SAFE_INTEGER
+  return count.toString()
+}
+
+type ActionType = typeof actionTypes
+
+type Action =
+  | { type: ActionType["ADD_TOAST"]; toast: ToasterToast }
+  | { type: ActionType["UPDATE_TOAST"]; toast: Partial<ToasterToast> }
+  | { type: ActionType["DISMISS_TOAST"]; toastId?: ToasterToast["id"] }
+  | { type: ActionType["REMOVE_TOAST"]; toastId?: ToasterToast["id"] }
+
+interface State {
+  toasts: ToasterToast[]
+}
+
+const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+const addToRemoveQueue = (toastId: string) => {
+  if (toastTimeouts.has(toastId)) return
+
+  const timeout = setTimeout(() => {
+    toastTimeouts.delete(toastId)
+    dispatch({ type: "REMOVE_TOAST", toastId: toastId })
+  }, TOAST_REMOVE_DELAY)
+
+  toastTimeouts.set(toastId, timeout)
+}
+
+export const reducer = (state: State, action: Action): State => {
+  switch (action.type) {
+    case "ADD_TOAST":
+      return {
+        ...state,
+        toasts: [action.toast, ...state.toasts].slice(0, TOAST_LIMIT),
+      }
+    case "UPDATE_TOAST":
+      return {
+        ...state,
+        toasts: state.toasts.map((t) =>
+          t.id === action.toast.id ? { ...t, ...action.toast } : t
+        ),
+      }
+    case "DISMISS_TOAST": {
+      const { toastId } = action
+      if (toastId) {
+        addToRemoveQueue(toastId)
+      } else {
+        state.toasts.forEach((toast) => { addToRemoveQueue(toast.id) })
+      }
+      return {
+        ...state,
+        toasts: state.toasts.map((t) =>
+          t.id === toastId || toastId === undefined ? { ...t, open: false } : t
+        ),
+      }
+    }
+    case "REMOVE_TOAST":
+      if (action.toastId === undefined) {
+        return { ...state, toasts: [] }
+      }
+      return {
+        ...state,
+        toasts: state.toasts.filter((t) => t.id !== action.toastId),
+      }
+  }
+}
+
+const listeners: Array<(state: State) => void> = []
+let memoryState: State = { toasts: [] }
+
+function dispatch(action: Action) {
+  memoryState = reducer(memoryState, action)
+  listeners.forEach((listener) => { listener(memoryState) })
+}
+
+type Toast = Omit<ToasterToast, "id">
+
+function toast({ ...props }: Toast) {
+  const id = genId()
+
+  const update = (props: ToasterToast) =>
+    dispatch({ type: "UPDATE_TOAST", toast: { ...props, id } })
+  const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+
+  dispatch({
+    type: "ADD_TOAST",
+    toast: {
+      ...props,
+      id,
+      open: true,
+      onOpenChange: (open) => { if (!open) dismiss() },
+    },
+  })
+
+  return { id, dismiss, update }
+}
+
+function useToast() {
+  const [state, setState] = React.useState<State>(memoryState)
+
+  React.useEffect(() => {
+    listeners.push(setState)
+    return () => {
+      const index = listeners.indexOf(setState)
+      if (index > -1) { listeners.splice(index, 1) }
+    }
+  }, [state])
+
+  return {
+    ...state,
+    toast,
+    dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+  }
+}
+
+export { useToast, toast }
+
+================================================================================
+FILE: artifacts/judge-ai/src/components/navbar.tsx
+================================================================================
+import { useAuth } from "@/contexts/auth";
+import { Link, useLocation } from "wouter";
+import { Scale, Upload, ClipboardCheck, LayoutDashboard, LogOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+
+export function Navbar() {
+  const { user, logout } = useAuth();
+  const [location] = useLocation();
+
+  const links = [
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["UPLOADER", "REVIEWER", "VIEWER"] },
+    { href: "/upload", label: "Upload", icon: Upload, roles: ["UPLOADER"] },
+    { href: "/verify", label: "Verify Queue", icon: ClipboardCheck, roles: ["REVIEWER"] },
+  ].filter(l => user && l.roles.includes(user.role));
+
+  return (
+    <nav className="bg-[#1a3c6e] text-white shadow-lg sticky top-0 z-50">
+      <div className="max-w-screen-xl mx-auto px-4 flex items-center justify-between h-14">
+        <div className="flex items-center gap-6">
+          <Link href="/dashboard" className="flex items-center gap-2 font-bold text-base tracking-tight">
+            <Scale className="h-5 w-5 text-amber-400" />
+            <span className="hidden sm:inline">ActionBenchAI</span>
+            <span className="text-xs text-blue-300 hidden md:inline font-normal">Court Judgment Intelligence</span>
+          </Link>
+          <div className="flex items-center gap-1">
+            {links.map(link => {
+              const Icon = link.icon;
+              const isActive = location === link.href || location.startsWith(link.href + "/");
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-white/20 text-white"
+                      : "text-blue-200 hover:text-white hover:bg-white/10"
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {link.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {user && (
+            <div className="hidden sm:flex items-center gap-2 text-sm">
+              <span className="text-blue-200">{user.name}</span>
+              <span className="bg-amber-500 text-white text-xs px-2 py-0.5 rounded font-semibold">{user.role}</span>
+            </div>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={logout}
+            className="text-blue-200 hover:text-white hover:bg-white/10"
+          >
+            <LogOut className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/components/confidence-badge.tsx
+================================================================================
+import { cn } from "@/lib/utils";
+
+interface ConfidenceBadgeProps {
+  score: number | null | undefined;
+  className?: string;
+}
+
+export function ConfidenceBadge({ score, className }: ConfidenceBadgeProps) {
+  if (score == null) return <span className="text-xs text-muted-foreground">N/A</span>;
+
+  const pct = Math.round(score * 100);
+  const color =
+    score > 0.85
+      ? "bg-green-100 text-green-800 border-green-200"
+      : score >= 0.6
+      ? "bg-yellow-100 text-yellow-800 border-yellow-200"
+      : "bg-red-100 text-red-800 border-red-200";
+
+  return (
+    <span className={cn("inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border", color, className)}>
+      {pct}%
+    </span>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/components/deadline-countdown.tsx
+================================================================================
+import { cn } from "@/lib/utils";
+import { Clock } from "lucide-react";
+
+interface DeadlineCountdownProps {
+  date: string | null | undefined;
+  className?: string;
+}
+
+export function DeadlineCountdown({ date, className }: DeadlineCountdownProps) {
+  if (!date) return <span className="text-xs text-muted-foreground">No deadline</span>;
+
+  const target = new Date(date);
+  const now = new Date();
+  const daysLeft = Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (daysLeft < 0) {
+    return (
+      <span className={cn("inline-flex items-center gap-1 text-xs font-medium text-red-700", className)}>
+        <Clock className="h-3 w-3" />
+        Overdue
+      </span>
+    );
+  }
+
+  const isUrgent = daysLeft <= 7;
+  return (
+    <span className={cn("inline-flex items-center gap-1 text-xs font-medium", isUrgent ? "text-red-700" : "text-muted-foreground", className)}>
+      <Clock className={cn("h-3 w-3", isUrgent && "animate-pulse")} />
+      {daysLeft === 0 ? "Due today" : `${daysLeft}d left`}
+    </span>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/components/priority-badge.tsx
+================================================================================
+import { cn } from "@/lib/utils";
+import { AlertTriangle, AlertCircle, Info, CheckCircle } from "lucide-react";
+
+const config: Record<string, { label: string; className: string; Icon: React.ElementType }> = {
+  CRITICAL: { label: "Critical", className: "bg-red-100 text-red-800 border-red-300", Icon: AlertCircle },
+  HIGH:     { label: "High",     className: "bg-orange-100 text-orange-800 border-orange-300", Icon: AlertTriangle },
+  MEDIUM:   { label: "Medium",   className: "bg-yellow-100 text-yellow-800 border-yellow-300", Icon: Info },
+  LOW:      { label: "Low",      className: "bg-green-100 text-green-800 border-green-200", Icon: CheckCircle },
+};
+
+interface PriorityBadgeProps {
+  level: string;
+  className?: string;
+}
+
+export function PriorityBadge({ level, className }: PriorityBadgeProps) {
+  const c = config[level] ?? config.MEDIUM;
+  const Icon = c.Icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border", c.className, className)}>
+      <Icon className="h-3 w-3" />
+      {c.label}
+    </span>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/components/status-timeline.tsx
+================================================================================
+import { cn } from "@/lib/utils";
+import { Check } from "lucide-react";
+
+const STEPS = [
+  { key: "PENDING",    label: "Uploaded"   },
+  { key: "PROCESSING", label: "Processing" },
+  { key: "EXTRACTED",  label: "Extracted"  },
+  { key: "VERIFIED",   label: "Verified"   },
+];
+
+const STEP_ORDER = ["PENDING", "PROCESSING", "EXTRACTED", "VERIFIED", "REJECTED", "EXTRACTION_FAILED"];
+
+interface StatusTimelineProps {
+  current: string;
+  className?: string;
+}
+
+export function StatusTimeline({ current, className }: StatusTimelineProps) {
+  const currentIdx = STEP_ORDER.indexOf(current);
+  const isFailed = current === "EXTRACTION_FAILED" || current === "REJECTED";
+
+  return (
+    <div className={cn("flex items-center gap-0", className)}>
+      {STEPS.map((step, i) => {
+        const stepIdx = STEP_ORDER.indexOf(step.key);
+        const isDone   = !isFailed && currentIdx > stepIdx;
+        const isActive = !isFailed && current === step.key;
+
+        return (
+          <div key={step.key} className="flex items-center">
+            <div className="flex flex-col items-center">
+              <div className={cn(
+                "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2",
+                isDone    ? "bg-[#1a3c6e] border-[#1a3c6e] text-white" :
+                isActive  ? "bg-amber-500 border-amber-500 text-white" :
+                isFailed && i >= 2 ? "bg-red-100 border-red-400 text-red-600" :
+                "bg-white border-gray-300 text-gray-400"
+              )}>
+                {isDone ? <Check className="h-3.5 w-3.5" /> : i + 1}
+              </div>
+              <span className={cn(
+                "text-xs mt-1 whitespace-nowrap",
+                isActive ? "text-amber-600 font-semibold" : isDone ? "text-[#1a3c6e]" : "text-gray-400"
+              )}>
+                {step.label}
+              </span>
+            </div>
+            {i < STEPS.length - 1 && (
+              <div className={cn("h-0.5 w-10 mb-4", isDone ? "bg-[#1a3c6e]" : "bg-gray-200")} />
+            )}
+          </div>
+        );
+      })}
+      {isFailed && (
+        <div className="ml-3 flex items-center gap-1 text-xs text-red-600 font-medium">
+          <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+          {current === "EXTRACTION_FAILED" ? "Extraction Failed" : "Rejected"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/pages/login.tsx
+================================================================================
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { useLogin, useRegister } from "@workspace/api-client-react";
+import { useAuth } from "@/contexts/auth";
+import { useLocation } from "wouter";
+import { useState } from "react";
+import { Scale, Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+});
+
+const registerSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  password: z.string().min(6),
+  role: z.enum(["UPLOADER", "REVIEWER", "VIEWER"]),
+  department: z.string().optional(),
+});
+
+type LoginValues = z.infer<typeof loginSchema>;
+type RegisterValues = z.infer<typeof registerSchema>;
+
+export default function Login() {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const { setToken } = useAuth();
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  const loginMutation = useLogin();
+  const registerMutation = useRegister();
+
+  const loginForm = useForm<LoginValues>({ resolver: zodResolver(loginSchema) });
+  const registerForm = useForm<RegisterValues>({
+    resolver: zodResolver(registerSchema),
+    defaultValues: { role: "VIEWER" },
+  });
+
+  function handleLoginSuccess(token: string, role: string) {
+    setToken(token);
+    if (role === "UPLOADER") setLocation("/upload");
+    else if (role === "REVIEWER") setLocation("/verify");
+    else setLocation("/dashboard");
+  }
+
+  function onLogin(values: LoginValues) {
+    loginMutation.mutate(
+      { data: values },
+      {
+        onSuccess: (data) => handleLoginSuccess(data.token, data.user.role),
+        onError: () => toast({ title: "Login failed", description: "Invalid email or password", variant: "destructive" }),
+      }
+    );
+  }
+
+  function onRegister(values: RegisterValues) {
+    registerMutation.mutate(
+      { data: values },
+      {
+        onSuccess: (data) => {
+          toast({ title: "Account created successfully" });
+          handleLoginSuccess(data.token, data.user.role);
+        },
+        onError: () => toast({ title: "Registration failed", description: "Email may already be in use", variant: "destructive" }),
+      }
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#1a3c6e] via-[#1e4a82] to-[#0f2547] flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white/10 backdrop-blur mb-4">
+            <Scale className="h-8 w-8 text-amber-400" />
+          </div>
+          <h1 className="text-3xl font-bold text-white tracking-tight">ActionBenchAI</h1>
+          <p className="text-blue-200 mt-1 text-sm">Court Judgment Intelligence System</p>
+          <p className="text-blue-300 text-xs mt-1">Centre for e-Governance</p>
+        </div>
+
+        <Card className="shadow-2xl border-0 bg-white">
+          <CardHeader className="pb-0 pt-6">
+            <div className="flex border-b">
+              <button
+                onClick={() => setMode("login")}
+                className={`flex-1 pb-3 text-sm font-semibold border-b-2 transition-colors ${
+                  mode === "login" ? "border-[#1a3c6e] text-[#1a3c6e]" : "border-transparent text-gray-400 hover:text-gray-600"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => setMode("register")}
+                className={`flex-1 pb-3 text-sm font-semibold border-b-2 transition-colors ${
+                  mode === "register" ? "border-[#1a3c6e] text-[#1a3c6e]" : "border-transparent text-gray-400 hover:text-gray-600"
+                }`}
+              >
+                Register
+              </button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-6">
+            {mode === "login" ? (
+              <form onSubmit={loginForm.handleSubmit(onLogin)} className="space-y-4">
+                <div>
+                  <Label htmlFor="email">Email Address</Label>
+                  <Input id="email" type="email" {...loginForm.register("email")} className="mt-1" />
+                  {loginForm.formState.errors.email && <p className="text-xs text-red-500 mt-1">{loginForm.formState.errors.email.message}</p>}
+                </div>
+                <div>
+                  <Label htmlFor="password">Password</Label>
+                  <Input id="password" type="password" {...loginForm.register("password")} className="mt-1" />
+                  {loginForm.formState.errors.password && <p className="text-xs text-red-500 mt-1">{loginForm.formState.errors.password.message}</p>}
+                </div>
+                <Button type="submit" className="w-full bg-[#1a3c6e] hover:bg-[#15305a]" disabled={loginMutation.isPending}>
+                  {loginMutation.isPending ? "Signing in..." : "Sign In"}
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={registerForm.handleSubmit(onRegister)} className="space-y-4">
+                <div>
+                  <Label htmlFor="r-name">Full Name</Label>
+                  <Input id="r-name" {...registerForm.register("name")} className="mt-1" />
+                </div>
+                <div>
+                  <Label htmlFor="r-email">Email Address</Label>
+                  <Input id="r-email" type="email" {...registerForm.register("email")} className="mt-1" />
+                </div>
+                <div>
+                  <Label htmlFor="r-password">Password</Label>
+                  <Input id="r-password" type="password" {...registerForm.register("password")} className="mt-1" />
+                </div>
+                <div>
+                  <Label>Role</Label>
+                  <Select onValueChange={(v) => registerForm.setValue("role", v as "UPLOADER" | "REVIEWER" | "VIEWER")} defaultValue="VIEWER">
+                    <SelectTrigger className="mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="UPLOADER">Uploader</SelectItem>
+                      <SelectItem value="REVIEWER">Reviewer</SelectItem>
+                      <SelectItem value="VIEWER">Viewer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="r-dept">Department (optional)</Label>
+                  <Input id="r-dept" {...registerForm.register("department")} className="mt-1" />
+                </div>
+                <Button type="submit" className="w-full bg-[#1a3c6e] hover:bg-[#15305a]" disabled={registerMutation.isPending}>
+                  {registerMutation.isPending ? "Creating account..." : "Create Account"}
+                </Button>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="flex items-center justify-center gap-2 mt-6 text-blue-200 text-xs">
+          <Shield className="h-3 w-3" />
+          <span>Secure Government Portal — Authorized Users Only</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/pages/upload.tsx
+================================================================================
+import { useState, useCallback, useRef } from "react";
+import { useGetJudgment, getGetJudgmentQueryKey } from "@workspace/api-client-react";
+import { Navbar } from "@/components/navbar";
+import { StatusTimeline } from "@/components/status-timeline";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { Upload as UploadIcon, FileText, CheckCircle, AlertCircle, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+const STATUS_LABELS: Record<string, string> = {
+  PENDING:           "Uploading & queued...",
+  PROCESSING:        "Running AI Analysis...",
+  EXTRACTED:         "Ready for Review",
+  EXTRACTION_FAILED: "Extraction Failed",
+};
+
+const STATUS_PROGRESS: Record<string, number> = {
+  PENDING:           25,
+  PROCESSING:        65,
+  EXTRACTED:         100,
+  EXTRACTION_FAILED: 100,
+};
+
+function UploadedJudgmentStatus({ judgmentId }: { judgmentId: number }) {
+  const { data: detail } = useGetJudgment(judgmentId, {
+    query: {
+      enabled: true,
+      queryKey: getGetJudgmentQueryKey(judgmentId),
+      refetchInterval: (query) => {
+        const status = (query.state.data as { judgment?: { status?: string } } | undefined)?.judgment?.status;
+        return status === "EXTRACTED" || status === "EXTRACTION_FAILED" ? false : 3000;
+      },
+    },
+  });
+
+  const judgment = detail?.judgment;
+  const status = judgment?.status ?? "PENDING";
+  const isFailed = status === "EXTRACTION_FAILED";
+  const isDone = status === "EXTRACTED";
+
+  return (
+    <Card className="mt-6 border-0 shadow-md">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          {isDone   ? <CheckCircle className="h-5 w-5 text-green-600" /> :
+           isFailed ? <AlertCircle className="h-5 w-5 text-red-500" /> :
+                      <FileText className="h-5 w-5 text-[#1a3c6e]" />}
+          Processing Status
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="overflow-x-auto">
+          <StatusTimeline current={status} />
+        </div>
+        <div>
+          <div className="flex justify-between text-sm mb-1">
+            <span className={cn(isFailed ? "text-red-600" : isDone ? "text-green-700 font-medium" : "text-[#1a3c6e]")}>
+              {STATUS_LABELS[status] ?? status}
+            </span>
+            <span className="text-muted-foreground">{STATUS_PROGRESS[status] ?? 0}%</span>
+          </div>
+          <Progress value={STATUS_PROGRESS[status] ?? 0} className={cn("h-2", isFailed && "[&>div]:bg-red-500", isDone && "[&>div]:bg-green-600")} />
+        </div>
+        {isFailed && (
+          <p className="text-sm text-red-600 bg-red-50 rounded p-3">
+            AI extraction failed. Please check the PDF quality and retry.
+          </p>
+        )}
+        {isDone && (
+          <p className="text-sm text-green-700 bg-green-50 rounded p-3">
+            Extraction complete. The judgment is now in the verification queue.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function Upload() {
+  const [dragOver, setDragOver] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [caseNumber, setCaseNumber] = useState("");
+  const [courtName, setCourtName] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadedId, setUploadedId] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+  const token = localStorage.getItem("jwt_token");
+
+  const handleFile = (f: File) => {
+    if (f.type !== "application/pdf") {
+      toast({ title: "Invalid file", description: "Only PDF files are allowed", variant: "destructive" });
+      return;
+    }
+    if (f.size > 50 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Maximum size is 50MB", variant: "destructive" });
+      return;
+    }
+    setFile(f);
+    setUploadedId(null);
+  };
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  }, []);
+
+  async function handleUpload() {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      if (caseNumber) formData.append("caseNumber", caseNumber);
+      if (courtName)  formData.append("courtName", courtName);
+
+      const res = await fetch("/api/judgments/upload", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "Upload failed");
+      }
+
+      const data = await res.json();
+      setUploadedId(data.id);
+      toast({ title: "Uploaded successfully", description: "AI processing has started" });
+      setFile(null);
+      setCaseNumber("");
+      setCourtName("");
+    } catch (err) {
+      toast({ title: "Upload failed", description: String(err), variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="max-w-2xl mx-auto px-4 py-8">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-foreground">Upload Court Judgment</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Upload a PDF of a court judgment for AI-powered extraction and analysis.</p>
+        </div>
+
+        <Card className="border-0 shadow-md">
+          <CardContent className="p-6 space-y-5">
+            <div
+              onDrop={onDrop}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onClick={() => fileInputRef.current?.click()}
+              className={cn(
+                "border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all",
+                dragOver ? "border-[#1a3c6e] bg-blue-50" :
+                file      ? "border-green-400 bg-green-50" :
+                            "border-gray-300 hover:border-[#1a3c6e] hover:bg-gray-50"
+              )}
+            >
+              <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+              {file ? (
+                <div className="flex items-center justify-center gap-3">
+                  <FileText className="h-8 w-8 text-green-600" />
+                  <div className="text-left">
+                    <p className="font-medium text-green-800 text-sm">{file.name}</p>
+                    <p className="text-xs text-green-600">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
+                  <button className="ml-2 text-gray-400 hover:text-red-500" onClick={(e) => { e.stopPropagation(); setFile(null); }}>
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <UploadIcon className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-sm font-medium text-gray-600">Drop a PDF here or click to browse</p>
+                  <p className="text-xs text-gray-400 mt-1">Maximum 50MB · PDF only</p>
+                </>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Case Number (optional)</Label>
+                <Input className="mt-1" value={caseNumber} onChange={e => setCaseNumber(e.target.value)} placeholder="e.g. W.P. 1234/2024" />
+              </div>
+              <div>
+                <Label>Court Name (optional)</Label>
+                <Input className="mt-1" value={courtName} onChange={e => setCourtName(e.target.value)} placeholder="e.g. Karnataka High Court" />
+              </div>
+            </div>
+
+            <Button onClick={handleUpload} disabled={!file || uploading} className="w-full bg-[#1a3c6e] hover:bg-[#15305a]">
+              {uploading ? "Uploading..." : "Upload & Analyze"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {uploadedId && <UploadedJudgmentStatus judgmentId={uploadedId} />}
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/pages/verify-queue.tsx
+================================================================================
+import { useGetVerifyQueue, getGetVerifyQueueQueryKey } from "@workspace/api-client-react";
+import { Navbar } from "@/components/navbar";
+import { ConfidenceBadge } from "@/components/confidence-badge";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ClipboardCheck, ExternalLink } from "lucide-react";
+import { Link } from "wouter";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
+
+export default function VerifyQueue() {
+  const { data: queue, isLoading } = useGetVerifyQueue({
+    query: { queryKey: getGetVerifyQueueQueryKey(), refetchInterval: 15000 },
+  });
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="max-w-5xl mx-auto px-4 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+              <ClipboardCheck className="h-6 w-6 text-[#1a3c6e]" />
+              Verification Queue
+            </h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              {isLoading ? "Loading..." : `${queue?.length ?? 0} judgment${queue?.length !== 1 ? "s" : ""} awaiting review`}
+            </p>
+          </div>
+        </div>
+
+        <Card className="border-0 shadow-md overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-[#1a3c6e] text-white text-xs uppercase tracking-wider">
+                  <th className="text-left px-4 py-3 font-semibold">Case No.</th>
+                  <th className="text-left px-4 py-3 font-semibold">Case Title</th>
+                  <th className="text-left px-4 py-3 font-semibold">Court</th>
+                  <th className="text-left px-4 py-3 font-semibold">Uploaded</th>
+                  <th className="text-left px-4 py-3 font-semibold">Uploaded By</th>
+                  <th className="text-left px-4 py-3 font-semibold">AI Confidence</th>
+                  <th className="text-left px-4 py-3 font-semibold">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading ? (
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={i} className="border-b">
+                      {Array.from({ length: 7 }).map((_, j) => (
+                        <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>
+                      ))}
+                    </tr>
+                  ))
+                ) : !queue || queue.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                      No judgments pending verification
+                    </td>
+                  </tr>
+                ) : (
+                  queue.map((item, idx) => (
+                    <tr
+                      key={item.id}
+                      className={cn("border-b hover:bg-blue-50 transition-colors", idx % 2 === 0 ? "bg-white" : "bg-gray-50/60")}
+                    >
+                      <td className="px-4 py-3 font-mono text-xs font-medium text-[#1a3c6e]">{item.caseNumber ?? "—"}</td>
+                      <td className="px-4 py-3 max-w-xs"><span className="line-clamp-2 text-sm">{item.caseTitle ?? "Untitled"}</span></td>
+                      <td className="px-4 py-3 text-muted-foreground">{item.courtName ?? "—"}</td>
+                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{format(new Date(item.uploadedAt), "dd MMM yyyy")}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{item.uploadedByName ?? "—"}</td>
+                      <td className="px-4 py-3"><ConfidenceBadge score={item.aiConfidenceScore} /></td>
+                      <td className="px-4 py-3">
+                        <Link href={`/verify/${item.id}`} className="inline-flex items-center gap-1 text-xs font-medium text-[#1a3c6e] hover:underline">
+                          Review <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/pages/verify-detail.tsx
+================================================================================
+import { useState } from "react";
+import {
+  useGetVerifyDetail, getGetVerifyDetailQueryKey,
+  useApproveJudgment, useEditJudgment, useRejectJudgment,
+  getGetVerifyQueueQueryKey
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Navbar } from "@/components/navbar";
+import { ConfidenceBadge } from "@/components/confidence-badge";
+import { PriorityBadge } from "@/components/priority-badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
+import { CheckCircle, Edit, XCircle, AlertTriangle, ChevronLeft } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Link } from "wouter";
+
+interface VerifyDetailProps { id: number; }
+
+function EditableField({ label, value, onSave, confidence }: {
+  label: string;
+  value: string | null | undefined;
+  onSave?: (v: string) => void;
+  confidence?: number | null;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value ?? "");
+  const isLowConf = confidence != null && confidence < 0.6;
+  const isMedConf = confidence != null && confidence >= 0.6 && confidence < 0.85;
+
+  if (editing && onSave) {
+    return (
+      <div className="space-y-1">
+        <label className="text-xs font-medium text-muted-foreground">{label}</label>
+        <input
+          className="w-full border rounded px-2 py-1 text-sm"
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          onBlur={() => { onSave(val); setEditing(false); }}
+          autoFocus
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded p-2 cursor-pointer hover:bg-gray-50 transition-colors group border",
+        isLowConf ? "border-red-200 bg-red-50" :
+        isMedConf ? "border-yellow-200 bg-yellow-50/40" :
+        "border-transparent"
+      )}
+      onClick={() => onSave && setEditing(true)}
+    >
+      <div className="flex items-center justify-between mb-0.5">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <div className="flex items-center gap-1.5">
+          {isLowConf && <AlertTriangle className="h-3 w-3 text-red-500" />}
+          {confidence != null && <ConfidenceBadge score={confidence} />}
+        </div>
+      </div>
+      <p className={cn("text-sm font-medium", !value && "text-muted-foreground italic")}>{value || "Not extracted"}</p>
+    </div>
+  );
+}
+
+export default function VerifyDetail({ id }: VerifyDetailProps) {
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  const { data, isLoading } = useGetVerifyDetail(id, {
+    query: { enabled: !!id, queryKey: getGetVerifyDetailQueryKey(id) },
+  });
+
+  const [editedExt, setEditedExt] = useState<Record<string, unknown>>({});
+  const [editedAP, setEditedAP] = useState<Record<string, unknown>>({});
+  const [reviewerNotes, setReviewerNotes] = useState("");
+  const [confirmAction, setConfirmAction] = useState<"approve" | "edit" | "reject" | null>(null);
+
+  const approveMut = useApproveJudgment();
+  const editMut    = useEditJudgment();
+  const rejectMut  = useRejectJudgment();
+
+  const judgment   = data?.judgment;
+  const extraction = data?.extraction;
+  const actionPlan = data?.actionPlan;
+  const token  = localStorage.getItem("jwt_token");
+  const pdfUrl = data?.pdfUrl ? `${data.pdfUrl}?token=${token}` : null;
+
+  function invalidate() {
+    qc.invalidateQueries({ queryKey: getGetVerifyQueueQueryKey() });
+    setLocation("/verify");
+  }
+
+  function handleConfirm() {
+    if (!confirmAction) return;
+    if (confirmAction === "approve") {
+      approveMut.mutate(
+        { judgmentId: id },
+        {
+          onSuccess: () => { toast({ title: "Judgment approved" }); invalidate(); },
+          onError: () => toast({ title: "Error", variant: "destructive" }),
+        }
+      );
+    } else if (confirmAction === "edit") {
+      const mergedExt = { ...(extraction ?? {}), ...editedExt };
+      const mergedAP  = { ...(actionPlan  ?? {}), ...editedAP  };
+      editMut.mutate(
+        { judgmentId: id, data: { editedExtraction: mergedExt, editedActionPlan: mergedAP, reviewerNotes: reviewerNotes || undefined } },
+        {
+          onSuccess: () => { toast({ title: "Judgment approved with edits" }); invalidate(); },
+          onError: () => toast({ title: "Error", variant: "destructive" }),
+        }
+      );
+    } else {
+      if (!reviewerNotes.trim()) { toast({ title: "Reviewer notes required for rejection", variant: "destructive" }); setConfirmAction(null); return; }
+      rejectMut.mutate(
+        { judgmentId: id, data: { reviewerNotes } },
+        {
+          onSuccess: () => { toast({ title: "Judgment rejected" }); invalidate(); },
+          onError: () => toast({ title: "Error", variant: "destructive" }),
+        }
+      );
+    }
+    setConfirmAction(null);
+  }
+
+  function setExtField(key: string, value: string) {
+    setEditedExt(prev => ({ ...prev, [key]: value }));
+  }
+
+  function getExtValue(key: string): string | null | undefined {
+    return (editedExt[key] as string | undefined) ?? (extraction as Record<string, unknown> | undefined)?.[key] as string | undefined;
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="max-w-7xl mx-auto px-4 py-8 space-y-4">
+          <Skeleton className="h-8 w-64" />
+          <div className="grid grid-cols-2 gap-6">
+            <Skeleton className="h-[600px]" />
+            <Skeleton className="h-[600px]" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data || !judgment) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="max-w-3xl mx-auto px-4 py-12 text-center">
+          <p className="text-muted-foreground">Judgment not found or not ready for review.</p>
+          <Link href="/verify" className="text-[#1a3c6e] hover:underline text-sm mt-4 inline-block">Back to Queue</Link>
+        </div>
+      </div>
+    );
+  }
+
+  const isBusy = approveMut.isPending || editMut.isPending || rejectMut.isPending;
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      <Navbar />
+      <div className="flex-1 flex flex-col">
+        <div className="border-b bg-white px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href="/verify" className="text-muted-foreground hover:text-foreground">
+              <ChevronLeft className="h-5 w-5" />
+            </Link>
+            <div>
+              <h1 className="font-bold text-foreground text-base">{judgment.caseNumber ?? "Judgment Review"}</h1>
+              <p className="text-xs text-muted-foreground">
+                {judgment.courtName} · AI Confidence: <ConfidenceBadge score={extraction?.aiConfidenceScore} />
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="destructive" onClick={() => setConfirmAction("reject")} disabled={isBusy}>
+              <XCircle className="h-4 w-4 mr-1" /> Reject
+            </Button>
+            <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => setConfirmAction("edit")} disabled={isBusy}>
+              <Edit className="h-4 w-4 mr-1" /> Approve with Edits
+            </Button>
+            <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => setConfirmAction("approve")} disabled={isBusy}>
+              <CheckCircle className="h-4 w-4 mr-1" /> Approve
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 overflow-hidden" style={{ height: "calc(100vh - 110px)" }}>
+          {/* Left: PDF Viewer */}
+          <div className="border-r bg-gray-100 flex flex-col">
+            <div className="px-4 py-2 bg-gray-200 border-b text-xs font-medium text-gray-600">PDF Document</div>
+            {pdfUrl ? (
+              <iframe src={pdfUrl} className="flex-1 w-full" title="Judgment PDF" />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground">PDF not available</div>
+            )}
+          </div>
+
+          {/* Right: Review Panel */}
+          <div className="flex flex-col overflow-hidden">
+            <Tabs defaultValue="extraction" className="flex flex-col h-full">
+              <TabsList className="mx-4 mt-3 mb-0 shrink-0">
+                <TabsTrigger value="extraction">Extracted Data</TabsTrigger>
+                <TabsTrigger value="actionplan">Action Plan</TabsTrigger>
+                <TabsTrigger value="notes">Review Notes</TabsTrigger>
+              </TabsList>
+
+              <div className="flex-1 overflow-y-auto px-4 py-3">
+                <TabsContent value="extraction" className="mt-0 space-y-2">
+                  <EditableField label="Case Title"            value={getExtValue("caseTitle")}           onSave={v => setExtField("caseTitle", v)} />
+                  <EditableField label="Case Number"           value={getExtValue("caseNumber")}          onSave={v => setExtField("caseNumber", v)} />
+                  <EditableField label="Court Name"            value={getExtValue("courtName")}           onSave={v => setExtField("courtName", v)} />
+                  <EditableField label="Date of Order"         value={getExtValue("dateOfOrder")}         onSave={v => setExtField("dateOfOrder", v)} confidence={extraction?.dateOfOrder ? 0.9 : 0.3} />
+                  <EditableField label="Petitioner"            value={getExtValue("petitionerName")}      onSave={v => setExtField("petitionerName", v)} />
+                  <EditableField label="Petitioner Advocate"   value={getExtValue("petitionerAdvocate")}  onSave={v => setExtField("petitionerAdvocate", v)} />
+                  <EditableField label="Respondent"            value={getExtValue("respondentName")}      onSave={v => setExtField("respondentName", v)} />
+                  <EditableField label="Respondent Advocate"   value={getExtValue("respondentAdvocate")}  onSave={v => setExtField("respondentAdvocate", v)} />
+                  <div className="rounded p-2 border border-transparent">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Summary</p>
+                    <p className="text-sm">{extraction?.summaryText || "Not available"}</p>
+                  </div>
+                  {extraction?.relevantActs && extraction.relevantActs.length > 0 && (
+                    <div className="rounded p-2 border border-transparent">
+                      <p className="text-xs font-medium text-muted-foreground mb-2">Relevant Acts</p>
+                      <div className="flex flex-wrap gap-1">
+                        {extraction.relevantActs.map((act, i) => (
+                          <Badge key={i} variant="secondary" className="text-xs">{act}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {extraction?.keyDirections && extraction.keyDirections.length > 0 && (
+                    <div className="rounded p-2 border border-transparent">
+                      <p className="text-xs font-medium text-muted-foreground mb-2">Key Directions ({extraction.keyDirections.length})</p>
+                      <div className="space-y-2">
+                        {(extraction.keyDirections as Array<Record<string, unknown>>).map((d, i) => (
+                          <div key={i} className={cn("text-xs p-2 rounded border", (d.confidenceScore as number) < 0.6 ? "bg-red-50 border-red-200" : "bg-gray-50 border-gray-200")}>
+                            <p>{String(d.directive ?? "")}</p>
+                            {d.confidenceScore != null && <ConfidenceBadge score={d.confidenceScore as number} className="mt-1" />}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="actionplan" className="mt-0 space-y-3">
+                  {actionPlan ? (
+                    <>
+                      <div className="flex items-center justify-between p-3 bg-gray-50 rounded border">
+                        <span className="text-sm font-medium">Priority Level</span>
+                        <PriorityBadge level={actionPlan.priorityLevel} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className={cn("p-3 rounded border text-sm", actionPlan.complianceRequired ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200")}>
+                          <p className="text-xs text-muted-foreground mb-1">Compliance</p>
+                          <p className="font-semibold">{actionPlan.complianceRequired ? "Required" : "Not Required"}</p>
+                        </div>
+                        <div className={cn("p-3 rounded border text-sm", actionPlan.appealConsideration ? "bg-blue-50 border-blue-200" : "bg-gray-50 border-gray-200")}>
+                          <p className="text-xs text-muted-foreground mb-1">Appeal</p>
+                          <p className="font-semibold">{actionPlan.appealConsideration ? "Under Consideration" : "Not Applicable"}</p>
+                        </div>
+                      </div>
+                      {actionPlan.appealDeadline && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded text-sm">
+                          <p className="text-xs text-muted-foreground mb-1">Appeal Deadline</p>
+                          <p className="font-semibold text-red-700">{actionPlan.appealDeadline}</p>
+                        </div>
+                      )}
+                      {actionPlan.aiRationale && (
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm">
+                          <p className="text-xs text-muted-foreground mb-1">AI Rationale</p>
+                          <p className="text-blue-800">{actionPlan.aiRationale}</p>
+                        </div>
+                      )}
+                      {Array.isArray(actionPlan.actionItems) && actionPlan.actionItems.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground mb-2">Action Items ({actionPlan.actionItems.length})</p>
+                          <div className="space-y-2">
+                            {(actionPlan.actionItems as Array<Record<string, unknown>>).map((item, i) => (
+                              <div key={i} className="p-3 bg-white border rounded text-xs space-y-1">
+                                <p className="font-medium text-sm">{String(item.action ?? "")}</p>
+                                <div className="flex flex-wrap gap-2 text-muted-foreground">
+                                  {Boolean(item.owner)   && <span>Owner: {String(item.owner)}</span>}
+                                  {Boolean(item.dueDate) && <span>Due: {String(item.dueDate)}</span>}
+                                  {Boolean(item.urgency) && (
+                                    <Badge variant={item.urgency === "HIGH" ? "destructive" : "secondary"} className="text-xs">
+                                      {String(item.urgency)}
+                                    </Badge>
+                                  )}
+                                  {Boolean(item.isInferred) && <Badge variant="outline" className="text-xs">Inferred</Badge>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground text-sm text-center py-8">Action plan not available</p>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="notes" className="mt-0">
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">Add reviewer notes. Notes are required when rejecting.</p>
+                    <Textarea
+                      value={reviewerNotes}
+                      onChange={e => setReviewerNotes(e.target.value)}
+                      placeholder="Enter your review notes here..."
+                      className="min-h-[200px]"
+                    />
+                  </div>
+                </TabsContent>
+              </div>
+            </Tabs>
+          </div>
+        </div>
+      </div>
+
+      <AlertDialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction === "approve" ? "Approve Judgment" : confirmAction === "edit" ? "Approve with Edits" : "Reject Judgment"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === "approve" && "This will mark the judgment as verified and publish it to the dashboard."}
+              {confirmAction === "edit"    && "Your inline edits will be saved and the judgment will be marked as verified."}
+              {confirmAction === "reject"  && "This judgment will be marked as rejected. This action cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirm}
+              className={
+                confirmAction === "reject" ? "bg-red-600 hover:bg-red-700" :
+                confirmAction === "edit"   ? "bg-blue-600 hover:bg-blue-700" :
+                "bg-green-600 hover:bg-green-700"
+              }
+            >
+              Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/pages/dashboard.tsx
+================================================================================
+import { useState } from "react";
+import {
+  useGetDashboardEntries, getGetDashboardEntriesQueryKey,
+  useGetDashboardStats, getGetDashboardStatsQueryKey,
+  useGetDashboardEntry, getGetDashboardEntryQueryKey,
+  useUpdateDashboardEntryStatus
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Navbar } from "@/components/navbar";
+import { PriorityBadge } from "@/components/priority-badge";
+import { DeadlineCountdown } from "@/components/deadline-countdown";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { LayoutDashboard, Search, BarChart2, TableIcon, Clock, AlertTriangle, CheckCircle, FileText } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { format } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
+
+const PRIORITY_COLORS: Record<string, string> = {
+  CRITICAL: "#dc2626",
+  HIGH:     "#f97316",
+  MEDIUM:   "#f59e0b",
+  LOW:      "#16a34a",
+};
+
+const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+  ACTIVE:   { label: "Active",   className: "bg-blue-100 text-blue-800"   },
+  COMPLIED: { label: "Complied", className: "bg-green-100 text-green-800" },
+  APPEALED: { label: "Appealed", className: "bg-purple-100 text-purple-800" },
+  CLOSED:   { label: "Closed",   className: "bg-gray-100 text-gray-600"   },
+};
+
+function StatCard({ label, value, icon: Icon, accent }: { label: string; value: number | string; icon: React.ElementType; accent?: string }) {
+  return (
+    <Card className="border-0 shadow-sm">
+      <CardContent className="p-4 flex items-center gap-4">
+        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center shrink-0", accent ?? "bg-[#1a3c6e]/10")}>
+          <Icon className={cn("h-5 w-5", accent ? "text-white" : "text-[#1a3c6e]")} />
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-foreground">{value}</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EntrySlideOver({ entryId, onClose }: { entryId: number; onClose: () => void }) {
+  const { data: entry } = useGetDashboardEntry(entryId, {
+    query: { enabled: !!entryId, queryKey: getGetDashboardEntryQueryKey(entryId) },
+  });
+  const updateStatus = useUpdateDashboardEntryStatus();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  function handleStatusChange(status: string) {
+    updateStatus.mutate(
+      { id: entryId, data: { status: status as "ACTIVE" | "COMPLIED" | "APPEALED" | "CLOSED" } },
+      {
+        onSuccess: () => {
+          qc.invalidateQueries({ queryKey: getGetDashboardEntriesQueryKey() });
+          qc.invalidateQueries({ queryKey: getGetDashboardStatsQueryKey() });
+          qc.invalidateQueries({ queryKey: getGetDashboardEntryQueryKey(entryId) });
+          toast({ title: "Status updated" });
+        },
+      }
+    );
+  }
+
+  return (
+    <Sheet open onOpenChange={onClose}>
+      <SheetContent className="w-[480px] sm:max-w-[480px] overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="text-base">{entry?.caseNumber ?? "Case Details"}</SheetTitle>
+        </SheetHeader>
+        {!entry ? (
+          <div className="space-y-3 mt-4">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12" />)}
+          </div>
+        ) : (
+          <div className="mt-4 space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <PriorityBadge level={entry.priorityLevel} />
+              <Badge className={cn("text-xs", STATUS_CONFIG[entry.status]?.className)}>{STATUS_CONFIG[entry.status]?.label ?? entry.status}</Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div><p className="text-xs text-muted-foreground">Court</p><p className="font-medium">{entry.courtName ?? "—"}</p></div>
+              <div><p className="text-xs text-muted-foreground">Date of Order</p><p className="font-medium">{entry.dateOfOrder ?? "—"}</p></div>
+              <div><p className="text-xs text-muted-foreground">Department</p><p className="font-medium">{entry.department ?? "—"}</p></div>
+              <div><p className="text-xs text-muted-foreground">Compliance</p><p className={cn("font-semibold", entry.complianceRequired ? "text-amber-700" : "text-green-700")}>{entry.complianceRequired ? "Required" : "Not Required"}</p></div>
+            </div>
+            {entry.caseTitle && (
+              <div className="p-3 bg-gray-50 rounded border text-sm">
+                <p className="text-xs text-muted-foreground mb-1">Case Title</p>
+                <p className="font-medium">{entry.caseTitle}</p>
+              </div>
+            )}
+            {entry.appealConsidering && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm">
+                <p className="text-xs text-blue-600 font-semibold mb-1">Appeal Under Consideration</p>
+                {entry.appealDeadline && (
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-3.5 w-3.5 text-blue-500" />
+                    <span>Deadline: {entry.appealDeadline}</span>
+                    <DeadlineCountdown date={entry.appealDeadline} />
+                  </div>
+                )}
+              </div>
+            )}
+            {Array.isArray(entry.keyActions) && entry.keyActions.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Action Items</p>
+                <div className="space-y-2">
+                  {(entry.keyActions as Array<Record<string, unknown>>).map((a, i) => (
+                    <div key={i} className="p-2.5 bg-white border rounded text-xs">
+                      <p className="font-medium text-sm">{String(a.action ?? "")}</p>
+                      <div className="flex gap-2 mt-1 text-muted-foreground">
+                        {Boolean(a.owner)   && <span>Owner: {String(a.owner)}</span>}
+                        {Boolean(a.dueDate) && <span>Due: {String(a.dueDate)}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Update Status</p>
+              <Select value={entry.status} onValueChange={handleStatusChange}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ACTIVE">Active</SelectItem>
+                  <SelectItem value="COMPLIED">Complied</SelectItem>
+                  <SelectItem value="APPEALED">Appealed</SelectItem>
+                  <SelectItem value="CLOSED">Closed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+export default function Dashboard() {
+  const [filters, setFilters] = useState({ department: "", priority: "", status: "", search: "", page: 1 });
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+
+  const queryParams = {
+    ...(filters.department && { department: filters.department }),
+    ...(filters.priority   && { priority:   filters.priority }),
+    ...(filters.status     && { status:     filters.status }),
+    ...(filters.search     && { search:     filters.search }),
+    page: filters.page,
+    limit: 50,
+  };
+
+  const { data: entriesData, isLoading: loadingEntries } = useGetDashboardEntries(queryParams, {
+    query: { queryKey: getGetDashboardEntriesQueryKey(queryParams) },
+  });
+
+  const { data: stats } = useGetDashboardStats({
+    query: { queryKey: getGetDashboardStatsQueryKey(), refetchInterval: 30000 },
+  });
+
+  const entries  = entriesData?.entries ?? [];
+  const barData  = stats ? Object.entries(stats.byDepartment as Record<string, number>).map(([name, count]) => ({ name: name.length > 15 ? name.slice(0, 15) + "…" : name, count })) : [];
+  const pieData  = stats ? Object.entries(stats.byPriority  as Record<string, number>).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value })) : [];
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="max-w-screen-xl mx-auto px-4 py-6 space-y-6">
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard label="Total Cases"          value={stats?.total ?? 0}                           icon={FileText} />
+          <StatCard label="Pending Verification"  value={stats?.pendingVerification ?? 0}             icon={Clock} />
+          <StatCard label="High/Critical"         value={(stats?.byPriority as Record<string, number> | undefined)?.HIGH ?? 0 + ((stats?.byPriority as Record<string, number> | undefined)?.CRITICAL ?? 0)} icon={AlertTriangle} />
+          <StatCard label="Upcoming Deadlines"    value={stats?.upcomingDeadlines?.length ?? 0}       icon={CheckCircle} />
+        </div>
+
+        {/* Filters */}
+        <Card className="border-0 shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input placeholder="Search cases..." className="pl-9" value={filters.search}
+                  onChange={e => setFilters(f => ({ ...f, search: e.target.value, page: 1 }))} />
+              </div>
+              <Select value={filters.priority || "all"} onValueChange={v => setFilters(f => ({ ...f, priority: v === "all" ? "" : v, page: 1 }))}>
+                <SelectTrigger className="w-36"><SelectValue placeholder="Priority" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Priorities</SelectItem>
+                  <SelectItem value="CRITICAL">Critical</SelectItem>
+                  <SelectItem value="HIGH">High</SelectItem>
+                  <SelectItem value="MEDIUM">Medium</SelectItem>
+                  <SelectItem value="LOW">Low</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={filters.status || "all"} onValueChange={v => setFilters(f => ({ ...f, status: v === "all" ? "" : v, page: 1 }))}>
+                <SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="ACTIVE">Active</SelectItem>
+                  <SelectItem value="COMPLIED">Complied</SelectItem>
+                  <SelectItem value="APPEALED">Appealed</SelectItem>
+                  <SelectItem value="CLOSED">Closed</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="flex rounded border overflow-hidden">
+                <button onClick={() => setViewMode("table")} className={cn("px-3 py-1.5 text-sm transition-colors", viewMode === "table" ? "bg-[#1a3c6e] text-white" : "hover:bg-gray-100")}>
+                  <TableIcon className="h-4 w-4" />
+                </button>
+                <button onClick={() => setViewMode("cards")} className={cn("px-3 py-1.5 text-sm transition-colors", viewMode === "cards" ? "bg-[#1a3c6e] text-white" : "hover:bg-gray-100")}>
+                  <BarChart2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Table View */}
+        {viewMode === "table" && (
+          <Card className="border-0 shadow-md overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-[#1a3c6e] text-white text-xs uppercase tracking-wider">
+                    <th className="text-left px-4 py-3 font-semibold">Priority</th>
+                    <th className="text-left px-4 py-3 font-semibold">Case No.</th>
+                    <th className="text-left px-4 py-3 font-semibold">Case Title</th>
+                    <th className="text-left px-4 py-3 font-semibold">Court</th>
+                    <th className="text-left px-4 py-3 font-semibold">Department</th>
+                    <th className="text-left px-4 py-3 font-semibold">Deadline</th>
+                    <th className="text-left px-4 py-3 font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loadingEntries ? (
+                    Array.from({ length: 8 }).map((_, i) => (
+                      <tr key={i} className="border-b">
+                        {Array.from({ length: 7 }).map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4 w-full" /></td>)}
+                      </tr>
+                    ))
+                  ) : entries.length === 0 ? (
+                    <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">No dashboard entries yet</td></tr>
+                  ) : (
+                    entries.map((e, idx) => (
+                      <tr key={e.id} onClick={() => setSelectedId(e.id)}
+                        className={cn("border-b hover:bg-blue-50 cursor-pointer transition-colors", idx % 2 === 0 ? "bg-white" : "bg-gray-50/60")}>
+                        <td className="px-4 py-3"><PriorityBadge level={e.priorityLevel} /></td>
+                        <td className="px-4 py-3 font-mono text-xs font-medium text-[#1a3c6e]">{e.caseNumber ?? "—"}</td>
+                        <td className="px-4 py-3 max-w-xs"><span className="line-clamp-2">{e.caseTitle ?? "—"}</span></td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs">{e.courtName ?? "—"}</td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs">{e.department ?? "—"}</td>
+                        <td className="px-4 py-3"><DeadlineCountdown date={e.appealDeadline} /></td>
+                        <td className="px-4 py-3">
+                          <span className={cn("inline-flex items-center px-2 py-0.5 rounded text-xs font-medium", STATUS_CONFIG[e.status]?.className)}>
+                            {STATUS_CONFIG[e.status]?.label ?? e.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {/* Card View */}
+        {viewMode === "cards" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {loadingEntries ? (
+              Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-48" />)
+            ) : entries.length === 0 ? (
+              <div className="col-span-3 text-center py-12 text-muted-foreground">No dashboard entries yet</div>
+            ) : (
+              entries.map(e => (
+                <Card key={e.id} onClick={() => setSelectedId(e.id)} className="cursor-pointer hover:shadow-md transition-shadow border border-gray-200">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <PriorityBadge level={e.priorityLevel} />
+                      <span className={cn("text-xs px-2 py-0.5 rounded font-medium", STATUS_CONFIG[e.status]?.className)}>{STATUS_CONFIG[e.status]?.label}</span>
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-[#1a3c6e]">{e.caseNumber ?? "No case number"}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{e.caseTitle ?? "Untitled"}</p>
+                    </div>
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      {e.courtName  && <div className="flex items-center gap-1"><FileText className="h-3 w-3" />{e.courtName}</div>}
+                      {e.department && <div>{e.department}</div>}
+                    </div>
+                    <div className="pt-2 border-t flex items-center justify-between">
+                      <span className={cn("text-xs font-medium", e.complianceRequired ? "text-amber-700" : "text-green-700")}>
+                        {e.complianceRequired ? "Compliance Required" : "No Compliance Required"}
+                      </span>
+                      <DeadlineCountdown date={e.appealDeadline} />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* Charts */}
+        {stats && (barData.length > 0 || pieData.length > 0) && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {barData.length > 0 && (
+              <Card className="border-0 shadow-md">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold">Cases by Department</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={barData} margin={{ left: -10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                      <YAxis tick={{ fontSize: 10 }} />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#1a3c6e" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            )}
+            {pieData.length > 0 && (
+              <Card className="border-0 shadow-md">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold">Priority Distribution</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <PieChart>
+                      <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={90} dataKey="value"
+                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
+                        {pieData.map((entry) => (
+                          <Cell key={entry.name} fill={PRIORITY_COLORS[entry.name] ?? "#8884d8"} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Upcoming Deadlines */}
+        {stats && stats.upcomingDeadlines.length > 0 && (
+          <Card className="border-0 shadow-md">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Clock className="h-4 w-4 text-amber-500" />
+                Upcoming Deadlines (Next 30 Days)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {(stats.upcomingDeadlines as Array<Record<string, unknown>>).map((d, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-100 rounded text-sm">
+                    <div>
+                      <span className="font-medium">{String(d.caseNumber ?? "—")}</span>
+                      <span className="text-muted-foreground ml-2 text-xs">{String(d.caseTitle ?? "")}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <PriorityBadge level={String(d.priorityLevel ?? "MEDIUM")} />
+                      <DeadlineCountdown date={String(d.deadline ?? "")} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {selectedId && <EntrySlideOver entryId={selectedId} onClose={() => setSelectedId(null)} />}
+    </div>
+  );
+}
+
+================================================================================
+FILE: artifacts/judge-ai/src/pages/not-found.tsx
+================================================================================
+import { Link } from "wouter";
+import { Scale, Home } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+export default function NotFound() {
+  return (
+    <div className="min-h-screen bg-[#1a3c6e] flex flex-col items-center justify-center text-white p-4">
+      <Scale className="h-12 w-12 text-amber-400 mb-4" />
+      <p className="text-sm text-blue-300 mb-2">ActionBenchAI</p>
+      <h1 className="text-6xl font-bold mb-2">404</h1>
+      <p className="text-xl text-blue-200 mb-6">Page not found</p>
+      <Link href="/">
+        <Button className="bg-white text-[#1a3c6e] hover:bg-blue-50">
+          <Home className="h-4 w-4 mr-2" />
+          Return to Dashboard
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
+================================================================================
+NOTE: The ui/ components folder (shadcn/ui) contains standard library components
+(Button, Card, Input, Select, Tabs, Badge, Sheet, Dialog, etc.) generated from
+shadcn/ui — these are not custom-written and are identical to the published
+shadcn/ui source. The custom application code is everything listed above.
+================================================================================
+END OF FRONTEND SOURCE CODE
+================================================================================

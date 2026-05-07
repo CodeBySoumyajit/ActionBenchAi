@@ -1,0 +1,20 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "IjhOz21LH5QBgZ8E_ls6W"
+uri = "file://api-server-backend.tar.gz"
+type = "unspecified"
+title = "ActionBenchAI — Backend Source Code"
+
+[[outputs]]
+id = "t-S1x9xSFm2cVVz_PCw2j"
+uri = "file://actionbenchai-backend-source.txt"
+type = "text"
+title = "ActionBenchAI — Backend Source Code (All Files)"
+
+[[outputs]]
+id = "3AAFLu-Tc9dF97eomrvlB"
+uri = "file://actionbenchai-frontend-source.txt"
+type = "text"
+title = "ActionBenchAI — Frontend Source Code (All Files)"

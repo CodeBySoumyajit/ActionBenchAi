@@ -1,0 +1,307 @@
+🏛️ CCMS AI — Full Stack Hackathon Build Prompt
+
+SYSTEM OVERVIEW
+Build a production-ready full-stack web application called "JudgeAI — Court Judgment Intelligence System" for the Centre for e-Governance. The system ingests court judgment PDFs, uses AI to extract structured legal data, generates actionable compliance plans, routes them through a human verification workflow, and displays only verified data on a government decision-maker dashboard.
+
+TECH STACK
+Frontend: React (Vite) + Tailwind CSS + shadcn/ui
+Backend: Node.js + Express.js (REST API)
+Database: PostgreSQL (via Prisma ORM)
+AI Layer: Anthropic Claude API (claude-sonnet-4-20250514) with PDF document support
+PDF Handling: pdf-parse (text PDFs) + Tesseract.js (scanned/OCR PDFs)
+Auth: JWT-based role authentication (Uploader / Reviewer / Dashboard Viewer)
+File Storage: Local multer storage (or S3-compatible)
+Charts: Recharts
+Deployment: Single monorepo with /client and /server folders
+
+DATABASE SCHEMA (Prisma)
+Design the following models:
+User { id, name, email, passwordHash, role: UPLOADER|REVIEWER|VIEWER, department, createdAt }
+
+Judgment { id, caseNumber, courtName, pdfPath, uploadedBy, uploadedAt, status: PENDING|PROCESSING|EXTRACTED|VERIFIED|REJECTED }
+
+Extraction {
+  id, judgmentId,
+  caseTitle, caseNumber, courtName, dateOfOrder, bench,
+  petitioner, respondent, petitionerAdvocate, respondentAdvocate,
+  keyDirections: JSON[],        // array of { directive, page, confidenceScore }
+  timelines: JSON[],            // array of { event, date, isInferred }
+  relevantActs: string[],
+  summaryText,
+  rawExtractedText,
+  aiConfidenceScore,
+  extractionModel,
+  extractedAt
+}
+
+ActionPlan {
+  id, judgmentId, extractionId,
+  complianceRequired: bool,
+  appealConsideration: bool,
+  appealLimitationDays: int,
+  appealDeadline: date,
+  responsibleDepartments: string[],
+  priorityLevel: LOW|MEDIUM|HIGH|CRITICAL,
+  actionItems: JSON[],          // array of { action, owner, dueDate, isInferred }
+  natureOfAction,
+  aiRationale,
+  generatedAt
+}
+
+VerificationRecord {
+  id, judgmentId, extractionId, actionPlanId,
+  reviewedBy, reviewedAt,
+  status: APPROVED|EDITED|REJECTED,
+  reviewerNotes,
+  editedExtraction: JSON,       // stores reviewer overrides
+  editedActionPlan: JSON
+}
+
+DashboardEntry {
+  id, verificationId, judgmentId,
+  department, caseNumber, caseTitle,
+  priorityLevel, complianceRequired, appealConsidering,
+  keyActions: JSON[], importantDates: JSON[],
+  status: ACTIVE|COMPLIED|APPEALED|CLOSED,
+  createdAt, updatedAt
+}
+
+BACKEND API ROUTES
+Auth
+
+POST /api/auth/register — register with role
+POST /api/auth/login — returns JWT
+
+Judgment Upload & Processing
+
+POST /api/judgments/upload — multipart PDF upload, saves file, creates Judgment record, triggers async processing pipeline
+GET /api/judgments — list all judgments with status
+GET /api/judgments/:id — single judgment detail
+GET /api/judgments/:id/pdf — serve raw PDF for inline viewer
+
+AI Processing Pipeline (internal, triggered on upload)
+Build a pipeline service processingPipeline.js:
+Step 1 — PDF Text Extraction
+
+Use pdf-parse for digital PDFs
+Fall back to Tesseract.js OCR for scanned PDFs
+Detect which mode was used, store in metadata
+
+Step 2 — AI Extraction via Claude API
+Send the full extracted text (chunked if >100k chars) to Claude with this system prompt:
+You are a legal document analysis AI for the Indian government's Court Case Monitoring System. 
+Analyze the court judgment text provided and extract structured data.
+
+Return ONLY valid JSON with this exact schema:
+{
+  "caseTitle": "",
+  "caseNumber": "",
+  "courtName": "",
+  "dateOfOrder": "YYYY-MM-DD or null",
+  "bench": [],
+  "petitioner": { "name": "", "advocate": "" },
+  "respondent": { "name": "", "advocate": "" },
+  "keyDirections": [
+    { "directive": "", "pageHint": "", "confidenceScore": 0.0-1.0, "isExplicit": true/false }
+  ],
+  "timelines": [
+    { "event": "", "date": "YYYY-MM-DD or null", "isInferred": true/false, "inferenceReason": "" }
+  ],
+  "relevantActs": [],
+  "summaryText": "",
+  "overallConfidenceScore": 0.0-1.0,
+  "confidenceNotes": ""
+}
+Step 3 — Action Plan Generation via second Claude call
+Using the extraction JSON, call Claude again with:
+Based on this court judgment extraction for an Indian government department, generate an actionable compliance plan.
+
+Return ONLY valid JSON:
+{
+  "complianceRequired": true/false,
+  "complianceRationale": "",
+  "appealConsideration": true/false,
+  "appealRationale": "",
+  "appealLimitationDays": number or null,
+  "appealDeadline": "YYYY-MM-DD or null",
+  "priorityLevel": "LOW|MEDIUM|HIGH|CRITICAL",
+  "priorityRationale": "",
+  "responsibleDepartments": [],
+  "natureOfAction": "",
+  "actionItems": [
+    { "action": "", "owner": "", "dueDate": "YYYY-MM-DD or null", "isInferred": true/false, "urgency": "LOW|MEDIUM|HIGH" }
+  ],
+  "aiRationale": ""
+}
+Update Judgment status throughout: PROCESSING → EXTRACTED
+Verification
+
+GET /api/verify/queue — list all EXTRACTED judgments pending review
+GET /api/verify/:judgmentId — get extraction + action plan side-by-side with PDF URL
+POST /api/verify/:judgmentId/approve — approve as-is, create DashboardEntry, mark VERIFIED
+POST /api/verify/:judgmentId/edit — body contains { editedExtraction, editedActionPlan, reviewerNotes }, saves edits, creates DashboardEntry
+POST /api/verify/:judgmentId/reject — body contains { reviewerNotes }, marks REJECTED
+
+Dashboard
+
+GET /api/dashboard/entries — all verified dashboard entries, supports query params: ?department=&priority=&status=&dateFrom=&dateTo=
+GET /api/dashboard/stats — { total, byPriority, byDepartment, byStatus, upcomingDeadlines[] }
+GET /api/dashboard/entries/:id — single entry detail
+PATCH /api/dashboard/entries/:id/status — update compliance status
+
+
+FRONTEND PAGES & COMPONENTS
+1. Login Page (/login)
+Clean government-style login. Role-based redirect after login.
+2. Upload Page (/upload) — UPLOADER role
+
+Drag-and-drop PDF upload zone with file validation
+Shows upload progress bar
+After upload: shows real-time processing status ticker:
+Uploading → Extracting Text → Running AI Analysis → Generating Action Plan → Ready for Review
+Use polling (GET /api/judgments/:id) every 3 seconds to update status
+
+3. Verification Queue (/verify) — REVIEWER role
+
+Table of all EXTRACTED judgments: Case No. | Court | Date | AI Confidence | Actions
+Color-coded confidence badges: Green (>0.85) / Yellow (0.6–0.85) / Red (<0.6)
+Click row → Verification Detail Page
+
+4. Verification Detail Page (/verify/:id) — KEY PAGE
+Split-panel layout:
+Left Panel — PDF Viewer
+
+Render PDF inline using react-pdf (PDF.js)
+Page navigation controls
+
+Right Panel — AI Extraction Review
+Tabbed interface:
+Tab 1: Extracted Data
+
+Show each field with its value AND confidence score
+Low-confidence fields highlighted in yellow with warning icon
+Every field is editable inline (click to edit)
+Show AI Confidence: 87% badge at top
+
+Tab 2: Action Plan
+
+Display all action items in card format
+Each item shows: Action | Owner | Due Date | Urgency badge | Inferred? badge
+All fields editable
+
+Tab 3: Review Notes
+
+Textarea for reviewer notes
+Mandatory if rejecting
+
+Bottom Action Bar:
+
+✅ Approve (green) | ✏️ Approve with Edits (blue) | ❌ Reject (red)
+Confirmation modal before any action
+
+5. Dashboard (/dashboard) — VIEWER + all roles
+Header Stats Row:
+[ Total Cases ] [ Pending Action ] [ High Priority ] [ Upcoming Deadlines ]
+Filter Bar: Department | Priority | Status | Date Range | Search
+Main Content:
+
+Left: Data table of all verified entries with sortable columns
+Clicking a row opens a slide-over detail panel (not a new page) showing full action plan
+
+Charts Section (below table):
+
+Bar chart: Cases by Department
+Donut chart: Priority Distribution
+Timeline chart: Deadlines in next 30 days (use Recharts)
+
+Individual Case Card View (toggle):
+Each card shows:
+┌─────────────────────────────────────────┐
+│ [CRITICAL] WP/1234/2024                 │
+│ Petitioner vs State of Karnataka        │
+│ Karnataka High Court | 12 Mar 2025      │
+├─────────────────────────────────────────┤
+│ 🏛 Dept: Revenue Department             │
+│ ⚡ Action: Comply with directive        │
+│ 📅 Deadline: 15 Jun 2025 (43 days)     │
+│ 🔔 Appeal: Under Consideration          │
+└─────────────────────────────────────────┘
+6. Shared Components
+
+<Navbar> with role-aware nav links + logout
+<ConfidenceBadge score={0.87} /> — colored pill
+<PriorityBadge level="HIGH" /> — colored with icon
+<StatusTimeline steps={[...]} current="EXTRACTED" /> — horizontal stepper
+<DeadlineCountdown date="2025-06-15" /> — shows days remaining, red if <7 days
+
+
+ROLE-BASED ACCESS CONTROL
+UPLOADER  → can access: /upload, /dashboard (view only)
+REVIEWER  → can access: /verify, /verify/:id, /dashboard (view only)  
+VIEWER    → can access: /dashboard only
+Protect routes both on frontend (redirect) and backend (JWT middleware + role check).
+
+AI PROMPT ENGINEERING DETAILS
+For the extraction call, prepend this context to improve Indian legal document handling:
+This is an Indian High Court judgment. Common patterns:
+- Case numbers: W.P., W.A., O.S., Crl., CMA formats
+- Dates in DD.MM.YYYY or DD/MM/YYYY format
+- Directives often preceded by "It is hereby directed", "The respondent shall", "Liberty is granted"
+- Limitation periods under Limitation Act 1963: typically 90 days for High Court appeals
+- Government respondents are often referred to as "State", "Union of India", department names
+Extract with high precision. If unsure, mark confidenceScore below 0.7 and explain in confidenceNotes.
+
+SAMPLE DATA & SEEDING
+Create a seed.js script that:
+
+Creates 3 demo users (one per role)
+Inserts 5 sample judgment records in various statuses
+Inserts corresponding mock extractions and action plans
+Creates 3 verified dashboard entries
+
+
+UI DESIGN SYSTEM
+Use a professional government-appropriate design:
+
+Primary color: #1a3c6e (deep navy blue)
+Accent: #f59e0b (amber — for warnings/deadlines)
+Success: #16a34a, Danger: #dc2626
+Font: Inter (clean, readable)
+All tables must have zebra striping, hover states, and sticky headers
+Mobile responsive (government officials use tablets)
+
+
+ERROR HANDLING & EDGE CASES
+
+If Claude API fails: mark judgment as EXTRACTION_FAILED, show retry button
+If PDF is scanned and OCR confidence <50%: warn reviewer with banner "Low quality scan — verify carefully"
+If no date of order found: flag as dateOfOrder: null and highlight in red on verification screen
+API rate limiting: 429 handler with exponential backoff retry (max 3 attempts)
+File size limit: reject PDFs >50MB with clear error message
+
+
+DELIVERABLE STRUCTURE
+/
+├── client/                    # React + Vite frontend
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Login.jsx
+│   │   │   ├── Upload.jsx
+│   │   │   ├── VerifyQueue.jsx
+│   │   │   ├── VerifyDetail.jsx
+│   │   │   └── Dashboard.jsx
+│   │   ├── components/
+│   │   └── api/               # axios service layer
+├── server/                    # Node.js + Express backend
+│   ├── routes/
+│   ├── services/
+│   │   ├── pdfExtractor.js
+│   │   ├── claudeExtractor.js
+│   │   ├── actionPlanGenerator.js
+│   │   └── processingPipeline.js
+│   ├── prisma/schema.prisma
+│   └── seed.js
+└── README.md
+
+JUDGING CRITERIA ALIGNMENT
+CriterionImplementationAccuracy of extractionConfidence scores, OCR fallback, Claude with legal contextAction plan qualityStructured JSON with rationale, inferred vs explicit flagsHuman verification UXSplit-panel PDF+AI view, inline editing, confidence highlightsDashboard clarityFilters, charts, deadline countdowns, department viewsExplainabilityEvery field shows AI rationale, confidence score, and source hint

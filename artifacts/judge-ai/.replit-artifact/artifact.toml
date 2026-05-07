@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "ActionBenchAI — Court Judgment Intelligence"
+version = "1.0.0"
+id = "artifacts/judge-ai"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22040
+
+[services.development]
+run = "pnpm --filter @workspace/judge-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/judge-ai", "run", "build" ]
+publicDir = "artifacts/judge-ai/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22040"
+BASE_PATH = "/"

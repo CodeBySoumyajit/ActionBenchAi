@@ -1,0 +1,815 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: ActionBenchAI - Court Judgment Intelligence System API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: judgments
+    description: Judgment upload and management
+  - name: verify
+    description: Verification workflow
+  - name: dashboard
+    description: Dashboard and statistics
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login and get JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterBody"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user info
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /judgments:
+    get:
+      operationId: listJudgments
+      tags: [judgments]
+      summary: List all judgments
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of judgments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JudgmentListResponse"
+
+  /judgments/upload:
+    post:
+      operationId: uploadJudgment
+      tags: [judgments]
+      summary: Upload a PDF judgment (multipart/form-data handled by multer)
+      responses:
+        "201":
+          description: Judgment uploaded, processing started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Judgment"
+
+  /judgments/{id}:
+    get:
+      operationId: getJudgment
+      tags: [judgments]
+      summary: Get a single judgment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Judgment detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JudgmentDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /judgments/{id}/retry:
+    post:
+      operationId: retryJudgment
+      tags: [judgments]
+      summary: Retry AI processing for a failed judgment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Retry started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Judgment"
+
+  /verify/queue:
+    get:
+      operationId: getVerifyQueue
+      tags: [verify]
+      summary: Get all judgments pending verification
+      responses:
+        "200":
+          description: Verification queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VerifyQueueItem"
+
+  /verify/{judgmentId}:
+    get:
+      operationId: getVerifyDetail
+      tags: [verify]
+      summary: Get judgment extraction and action plan for review
+      parameters:
+        - name: judgmentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Verification detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyDetail"
+
+  /verify/{judgmentId}/approve:
+    post:
+      operationId: approveJudgment
+      tags: [verify]
+      summary: Approve a judgment as-is
+      parameters:
+        - name: judgmentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationRecord"
+
+  /verify/{judgmentId}/edit:
+    post:
+      operationId: editJudgment
+      tags: [verify]
+      summary: Approve with edits
+      parameters:
+        - name: judgmentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditVerifyBody"
+      responses:
+        "200":
+          description: Approved with edits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationRecord"
+
+  /verify/{judgmentId}/reject:
+    post:
+      operationId: rejectJudgment
+      tags: [verify]
+      summary: Reject a judgment
+      parameters:
+        - name: judgmentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectVerifyBody"
+      responses:
+        "200":
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationRecord"
+
+  /dashboard/entries:
+    get:
+      operationId: getDashboardEntries
+      tags: [dashboard]
+      summary: Get all verified dashboard entries
+      parameters:
+        - name: department
+          in: query
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Dashboard entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardEntriesResponse"
+
+  /dashboard/stats:
+    get:
+      operationId: getDashboardStats
+      tags: [dashboard]
+      summary: Get dashboard statistics
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /dashboard/entries/{id}:
+    get:
+      operationId: getDashboardEntry
+      tags: [dashboard]
+      summary: Get a single dashboard entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Dashboard entry detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardEntry"
+
+  /dashboard/entries/{id}/status:
+    patch:
+      operationId: updateDashboardEntryStatus
+      tags: [dashboard]
+      summary: Update compliance status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEntryStatusBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardEntry"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    RegisterBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [UPLOADER, REVIEWER, VIEWER]
+        department:
+          type: string
+      required:
+        - name
+        - email
+        - password
+        - role
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - token
+        - user
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+        department:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - email
+        - role
+        - createdAt
+
+    Judgment:
+      type: object
+      properties:
+        id:
+          type: integer
+        caseNumber:
+          type: ["string", "null"]
+        courtName:
+          type: ["string", "null"]
+        pdfPath:
+          type: string
+        uploadedBy:
+          type: integer
+        uploadedAt:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, EXTRACTED, VERIFIED, REJECTED, EXTRACTION_FAILED]
+      required:
+        - id
+        - pdfPath
+        - uploadedBy
+        - uploadedAt
+        - status
+
+    JudgmentListResponse:
+      type: object
+      properties:
+        judgments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Judgment"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - judgments
+        - total
+        - page
+        - limit
+
+    ExtractionData:
+      type: object
+      properties:
+        id:
+          type: integer
+        judgmentId:
+          type: integer
+        caseTitle:
+          type: ["string", "null"]
+        caseNumber:
+          type: ["string", "null"]
+        courtName:
+          type: ["string", "null"]
+        dateOfOrder:
+          type: ["string", "null"]
+        bench:
+          type: array
+          items:
+            type: string
+        petitionerName:
+          type: ["string", "null"]
+        petitionerAdvocate:
+          type: ["string", "null"]
+        respondentName:
+          type: ["string", "null"]
+        respondentAdvocate:
+          type: ["string", "null"]
+        keyDirections:
+          type: array
+          items:
+            type: object
+        timelines:
+          type: array
+          items:
+            type: object
+        relevantActs:
+          type: array
+          items:
+            type: string
+        summaryText:
+          type: ["string", "null"]
+        aiConfidenceScore:
+          type: ["number", "null"]
+        extractionModel:
+          type: ["string", "null"]
+        extractedAt:
+          type: ["string", "null"]
+      required:
+        - id
+        - judgmentId
+
+    ActionPlanData:
+      type: object
+      properties:
+        id:
+          type: integer
+        judgmentId:
+          type: integer
+        complianceRequired:
+          type: boolean
+        appealConsideration:
+          type: boolean
+        appealLimitationDays:
+          type: ["integer", "null"]
+        appealDeadline:
+          type: ["string", "null"]
+        responsibleDepartments:
+          type: array
+          items:
+            type: string
+        priorityLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        actionItems:
+          type: array
+          items:
+            type: object
+        natureOfAction:
+          type: ["string", "null"]
+        aiRationale:
+          type: ["string", "null"]
+        generatedAt:
+          type: string
+      required:
+        - id
+        - judgmentId
+        - complianceRequired
+        - appealConsideration
+        - priorityLevel
+        - generatedAt
+
+    JudgmentDetail:
+      type: object
+      properties:
+        judgment:
+          $ref: "#/components/schemas/Judgment"
+        extraction:
+          $ref: "#/components/schemas/ExtractionData"
+        actionPlan:
+          $ref: "#/components/schemas/ActionPlanData"
+        uploadedByUser:
+          $ref: "#/components/schemas/User"
+      required:
+        - judgment
+
+    VerifyQueueItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        caseNumber:
+          type: ["string", "null"]
+        courtName:
+          type: ["string", "null"]
+        uploadedAt:
+          type: string
+        status:
+          type: string
+        aiConfidenceScore:
+          type: ["number", "null"]
+        caseTitle:
+          type: ["string", "null"]
+        uploadedByName:
+          type: ["string", "null"]
+      required:
+        - id
+        - uploadedAt
+        - status
+
+    VerifyDetail:
+      type: object
+      properties:
+        judgment:
+          $ref: "#/components/schemas/Judgment"
+        extraction:
+          $ref: "#/components/schemas/ExtractionData"
+        actionPlan:
+          $ref: "#/components/schemas/ActionPlanData"
+        pdfUrl:
+          type: string
+      required:
+        - judgment
+        - pdfUrl
+
+    EditVerifyBody:
+      type: object
+      properties:
+        editedExtraction:
+          type: object
+        editedActionPlan:
+          type: object
+        reviewerNotes:
+          type: string
+      required:
+        - editedExtraction
+        - editedActionPlan
+
+    RejectVerifyBody:
+      type: object
+      properties:
+        reviewerNotes:
+          type: string
+      required:
+        - reviewerNotes
+
+    VerificationRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        judgmentId:
+          type: integer
+        reviewedBy:
+          type: integer
+        reviewedAt:
+          type: string
+        status:
+          type: string
+          enum: [APPROVED, EDITED, REJECTED]
+        reviewerNotes:
+          type: ["string", "null"]
+      required:
+        - id
+        - judgmentId
+        - reviewedBy
+        - reviewedAt
+        - status
+
+    DashboardEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        verificationId:
+          type: integer
+        judgmentId:
+          type: integer
+        department:
+          type: ["string", "null"]
+        caseNumber:
+          type: ["string", "null"]
+        caseTitle:
+          type: ["string", "null"]
+        priorityLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        complianceRequired:
+          type: boolean
+        appealConsidering:
+          type: boolean
+        keyActions:
+          type: array
+          items:
+            type: object
+        importantDates:
+          type: array
+          items:
+            type: object
+        status:
+          type: string
+          enum: [ACTIVE, COMPLIED, APPEALED, CLOSED]
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        courtName:
+          type: ["string", "null"]
+        dateOfOrder:
+          type: ["string", "null"]
+        appealDeadline:
+          type: ["string", "null"]
+      required:
+        - id
+        - verificationId
+        - judgmentId
+        - priorityLevel
+        - complianceRequired
+        - appealConsidering
+        - status
+        - createdAt
+        - updatedAt
+
+    DashboardEntriesResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/DashboardEntry"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - entries
+        - total
+        - page
+        - limit
+
+    DashboardStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        byPriority:
+          type: object
+        byDepartment:
+          type: object
+        byStatus:
+          type: object
+        upcomingDeadlines:
+          type: array
+          items:
+            type: object
+        pendingVerification:
+          type: integer
+        processingCount:
+          type: integer
+        recentActivity:
+          type: array
+          items:
+            type: object
+      required:
+        - total
+        - byPriority
+        - byDepartment
+        - byStatus
+        - upcomingDeadlines
+        - pendingVerification
+        - processingCount
+        - recentActivity
+
+    UpdateEntryStatusBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ACTIVE, COMPLIED, APPEALED, CLOSED]
+      required:
+        - status

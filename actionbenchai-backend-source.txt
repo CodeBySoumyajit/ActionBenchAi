@@ -1,0 +1,1247 @@
+================================================================================
+ACTIONBENCHAI — BACKEND SOURCE CODE
+================================================================================
+
+================================================================================
+FILE: artifacts/api-server/src/index.ts
+================================================================================
+import app from "./app";
+import { logger } from "./lib/logger";
+
+const rawPort = process.env["PORT"];
+
+if (!rawPort) {
+  throw new Error(
+    "PORT environment variable is required but was not provided.",
+  );
+}
+
+const port = Number(rawPort);
+
+if (Number.isNaN(port) || port <= 0) {
+  throw new Error(`Invalid PORT value: "${rawPort}"`);
+}
+
+app.listen(port, (err) => {
+  if (err) {
+    logger.error({ err }, "Error listening on port");
+    process.exit(1);
+  }
+
+  logger.info({ port }, "Server listening");
+});
+
+================================================================================
+FILE: artifacts/api-server/src/app.ts
+================================================================================
+import express, { type Express } from "express";
+import cors from "cors";
+import pinoHttp from "pino-http";
+import router from "./routes";
+import { logger } from "./lib/logger";
+
+const app: Express = express();
+
+app.use(
+  pinoHttp({
+    logger,
+    serializers: {
+      req(req) {
+        return {
+          id: req.id,
+          method: req.method,
+          url: req.url?.split("?")[0],
+        };
+      },
+      res(res) {
+        return {
+          statusCode: res.statusCode,
+        };
+      },
+    },
+  }),
+);
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use("/api", router);
+
+export default app;
+
+================================================================================
+FILE: artifacts/api-server/src/lib/logger.ts
+================================================================================
+import pino from "pino";
+
+const isProduction = process.env.NODE_ENV === "production";
+
+export const logger = pino({
+  level: process.env.LOG_LEVEL ?? "info",
+  redact: [
+    "req.headers.authorization",
+    "req.headers.cookie",
+    "res.headers['set-cookie']",
+  ],
+  ...(isProduction
+    ? {}
+    : {
+        transport: {
+          target: "pino-pretty",
+          options: { colorize: true },
+        },
+      }),
+});
+
+================================================================================
+FILE: artifacts/api-server/src/lib/auth.ts
+================================================================================
+import jwt from "jsonwebtoken";
+import type { Request, Response, NextFunction } from "express";
+
+const JWT_SECRET = process.env.SESSION_SECRET ?? "actionbenchai-secret-change-in-prod";
+
+export interface JwtPayload {
+  userId: number;
+  email: string;
+  role: string;
+}
+
+export function signToken(payload: JwtPayload): string {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
+}
+
+export function verifyToken(token: string): JwtPayload {
+  return jwt.verify(token, JWT_SECRET) as JwtPayload;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: JwtPayload;
+    }
+  }
+}
+
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const token = auth.slice(7);
+  try {
+    req.user = verifyToken(token);
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+export function requireRole(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!roles.includes(req.user.role)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    next();
+  };
+}
+
+================================================================================
+FILE: artifacts/api-server/src/lib/pipeline.ts
+================================================================================
+import path from "path";
+import fs from "fs/promises";
+import { db, judgmentsTable, extractionsTable, actionPlansTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { logger } from "./logger";
+
+const EXTRACTION_SYSTEM_PROMPT = `You are a legal document analysis AI for the Indian government's Court Case Monitoring System. 
+Analyze the court judgment text provided and extract structured data.
+
+This is an Indian High Court judgment. Common patterns:
+- Case numbers: W.P., W.A., O.S., Crl., CMA formats
+- Dates in DD.MM.YYYY or DD/MM/YYYY format
+- Directives often preceded by "It is hereby directed", "The respondent shall", "Liberty is granted"
+- Limitation periods under Limitation Act 1963: typically 90 days for High Court appeals
+- Government respondents are often referred to as "State", "Union of India", department names
+Extract with high precision. If unsure, mark confidenceScore below 0.7 and explain in confidenceNotes.
+
+Return ONLY valid JSON with this exact schema:
+{
+  "caseTitle": "",
+  "caseNumber": "",
+  "courtName": "",
+  "dateOfOrder": "YYYY-MM-DD or null",
+  "bench": [],
+  "petitioner": { "name": "", "advocate": "" },
+  "respondent": { "name": "", "advocate": "" },
+  "keyDirections": [
+    { "directive": "", "pageHint": "", "confidenceScore": 0.0, "isExplicit": true }
+  ],
+  "timelines": [
+    { "event": "", "date": "YYYY-MM-DD or null", "isInferred": false, "inferenceReason": "" }
+  ],
+  "relevantActs": [],
+  "summaryText": "",
+  "overallConfidenceScore": 0.0,
+  "confidenceNotes": ""
+}`;
+
+const ACTION_PLAN_SYSTEM_PROMPT = `Based on this court judgment extraction for an Indian government department, generate an actionable compliance plan.
+
+Return ONLY valid JSON:
+{
+  "complianceRequired": true,
+  "complianceRationale": "",
+  "appealConsideration": false,
+  "appealRationale": "",
+  "appealLimitationDays": 90,
+  "appealDeadline": "YYYY-MM-DD or null",
+  "priorityLevel": "LOW|MEDIUM|HIGH|CRITICAL",
+  "priorityRationale": "",
+  "responsibleDepartments": [],
+  "natureOfAction": "",
+  "actionItems": [
+    { "action": "", "owner": "", "dueDate": "YYYY-MM-DD or null", "isInferred": false, "urgency": "LOW|MEDIUM|HIGH" }
+  ],
+  "aiRationale": ""
+}`;
+
+async function extractPdfText(pdfPath: string): Promise<{ text: string; ocrUsed: string }> {
+  try {
+    const pdfParse = await import("pdf-parse");
+    const buffer = await fs.readFile(pdfPath);
+    const data = await pdfParse.default(buffer);
+    if (data.text && data.text.trim().length > 100) {
+      return { text: data.text, ocrUsed: "pdf-parse" };
+    }
+    return { text: data.text || "", ocrUsed: "pdf-parse-low-quality" };
+  } catch (err) {
+    logger.error({ err, pdfPath }, "PDF extraction failed");
+    throw new Error("PDF text extraction failed");
+  }
+}
+
+function chunkText(text: string, maxChars = 80000): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + "\n\n[Document truncated for processing...]";
+}
+
+async function callClaudeWithRetry(messages: Array<{ role: "user" | "assistant"; content: string }>, system: string): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 8192,
+        system,
+        messages,
+      });
+      const block = response.content[0];
+      return block.type === "text" ? block.text : "";
+    } catch (err: unknown) {
+      lastErr = err;
+      const errMsg = String(err);
+      if (errMsg.includes("429") || errMsg.toLowerCase().includes("rate")) {
+        logger.warn({ attempt }, "Claude rate limited, retrying...");
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+function parseJsonFromResponse(raw: string): Record<string, unknown> {
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON found in response");
+  return JSON.parse(jsonMatch[0]);
+}
+
+export async function runProcessingPipeline(judgmentId: number): Promise<void> {
+  logger.info({ judgmentId }, "Starting processing pipeline");
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, judgmentId));
+  if (!judgment) throw new Error(`Judgment ${judgmentId} not found`);
+
+  await db.update(judgmentsTable).set({ status: "PROCESSING" }).where(eq(judgmentsTable.id, judgmentId));
+
+  try {
+    // Step 1: Extract PDF text
+    const { text, ocrUsed } = await extractPdfText(judgment.pdfPath);
+    const chunkedText = chunkText(text);
+
+    // Step 2: AI Extraction
+    const extractionRaw = await callClaudeWithRetry(
+      [{ role: "user", content: `Extract structured data from this court judgment:\n\n${chunkedText}` }],
+      EXTRACTION_SYSTEM_PROMPT
+    );
+
+    let extractionData: Record<string, unknown>;
+    try {
+      extractionData = parseJsonFromResponse(extractionRaw);
+    } catch {
+      throw new Error("Failed to parse extraction JSON from Claude");
+    }
+
+    const petitioner = extractionData.petitioner as Record<string, string> | undefined;
+    const respondent = extractionData.respondent as Record<string, string> | undefined;
+
+    const [extraction] = await db.insert(extractionsTable).values({
+      judgmentId,
+      caseTitle: String(extractionData.caseTitle ?? ""),
+      caseNumber: String(extractionData.caseNumber ?? judgment.caseNumber ?? ""),
+      courtName: String(extractionData.courtName ?? judgment.courtName ?? ""),
+      dateOfOrder: extractionData.dateOfOrder ? String(extractionData.dateOfOrder) : null,
+      bench: Array.isArray(extractionData.bench) ? extractionData.bench.map(String) : [],
+      petitionerName: petitioner?.name ?? null,
+      petitionerAdvocate: petitioner?.advocate ?? null,
+      respondentName: respondent?.name ?? null,
+      respondentAdvocate: respondent?.advocate ?? null,
+      keyDirections: (extractionData.keyDirections as Array<Record<string, unknown>>) ?? [],
+      timelines: (extractionData.timelines as Array<Record<string, unknown>>) ?? [],
+      relevantActs: Array.isArray(extractionData.relevantActs) ? extractionData.relevantActs.map(String) : [],
+      summaryText: extractionData.summaryText ? String(extractionData.summaryText) : null,
+      rawExtractedText: text.slice(0, 10000),
+      aiConfidenceScore: typeof extractionData.overallConfidenceScore === "number" ? extractionData.overallConfidenceScore : null,
+      confidenceNotes: extractionData.confidenceNotes ? String(extractionData.confidenceNotes) : null,
+      extractionModel: "claude-sonnet-4-6",
+      ocrUsed,
+    }).returning();
+
+    // Step 3: Action Plan Generation
+    const actionPlanRaw = await callClaudeWithRetry(
+      [{ role: "user", content: `Generate an action plan for this court judgment extraction:\n\n${JSON.stringify(extractionData, null, 2)}` }],
+      ACTION_PLAN_SYSTEM_PROMPT
+    );
+
+    let actionPlanData: Record<string, unknown>;
+    try {
+      actionPlanData = parseJsonFromResponse(actionPlanRaw);
+    } catch {
+      throw new Error("Failed to parse action plan JSON from Claude");
+    }
+
+    await db.insert(actionPlansTable).values({
+      judgmentId,
+      extractionId: extraction.id,
+      complianceRequired: Boolean(actionPlanData.complianceRequired),
+      complianceRationale: actionPlanData.complianceRationale ? String(actionPlanData.complianceRationale) : null,
+      appealConsideration: Boolean(actionPlanData.appealConsideration),
+      appealRationale: actionPlanData.appealRationale ? String(actionPlanData.appealRationale) : null,
+      appealLimitationDays: typeof actionPlanData.appealLimitationDays === "number" ? actionPlanData.appealLimitationDays : 90,
+      appealDeadline: actionPlanData.appealDeadline ? String(actionPlanData.appealDeadline) : null,
+      responsibleDepartments: Array.isArray(actionPlanData.responsibleDepartments) ? actionPlanData.responsibleDepartments.map(String) : [],
+      priorityLevel: (["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(String(actionPlanData.priorityLevel))
+        ? actionPlanData.priorityLevel as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+        : "MEDIUM"),
+      priorityRationale: actionPlanData.priorityRationale ? String(actionPlanData.priorityRationale) : null,
+      actionItems: (actionPlanData.actionItems as Array<Record<string, unknown>>) ?? [],
+      natureOfAction: actionPlanData.natureOfAction ? String(actionPlanData.natureOfAction) : null,
+      aiRationale: actionPlanData.aiRationale ? String(actionPlanData.aiRationale) : null,
+    });
+
+    await db.update(judgmentsTable).set({ status: "EXTRACTED" }).where(eq(judgmentsTable.id, judgmentId));
+    logger.info({ judgmentId }, "Processing pipeline complete");
+
+  } catch (err) {
+    logger.error({ err, judgmentId }, "Processing pipeline failed");
+    await db.update(judgmentsTable)
+      .set({ status: "EXTRACTION_FAILED", errorMessage: String(err) })
+      .where(eq(judgmentsTable.id, judgmentId));
+    throw err;
+  }
+}
+
+================================================================================
+FILE: artifacts/api-server/src/routes/index.ts
+================================================================================
+import { Router, type IRouter } from "express";
+import healthRouter from "./health";
+import authRouter from "./auth";
+import judgmentsRouter from "./judgments";
+import verifyRouter from "./verify";
+import dashboardRouter from "./dashboard";
+
+const router: IRouter = Router();
+
+router.use(healthRouter);
+router.use(authRouter);
+router.use(judgmentsRouter);
+router.use(verifyRouter);
+router.use(dashboardRouter);
+
+export default router;
+
+================================================================================
+FILE: artifacts/api-server/src/routes/health.ts
+================================================================================
+import { Router, type IRouter } from "express";
+import { HealthCheckResponse } from "@workspace/api-zod";
+
+const router: IRouter = Router();
+
+router.get("/healthz", (_req, res) => {
+  const data = HealthCheckResponse.parse({ status: "ok" });
+  res.json(data);
+});
+
+export default router;
+
+================================================================================
+FILE: artifacts/api-server/src/routes/auth.ts
+================================================================================
+import { Router, type IRouter } from "express";
+import bcrypt from "bcryptjs";
+import { db, usersTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { LoginBody, RegisterBody } from "@workspace/api-zod";
+import { signToken, requireAuth } from "../lib/auth";
+
+const router: IRouter = Router();
+
+router.post("/auth/register", async (req, res): Promise<void> => {
+  const parsed = RegisterBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { name, email, password, role, department } = parsed.data;
+
+  const existing = await db.select().from(usersTable).where(eq(usersTable.email, email));
+  if (existing.length > 0) {
+    res.status(400).json({ error: "Email already registered" });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const [user] = await db.insert(usersTable).values({
+    name,
+    email,
+    passwordHash,
+    role: role as "UPLOADER" | "REVIEWER" | "VIEWER",
+    department: department ?? null,
+  }).returning();
+
+  const token = signToken({ userId: user.id, email: user.email, role: user.role });
+  res.status(201).json({
+    token,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, department: user.department, createdAt: user.createdAt.toISOString() },
+  });
+});
+
+router.post("/auth/login", async (req, res): Promise<void> => {
+  const parsed = LoginBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { email, password } = parsed.data;
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email));
+  if (!user) {
+    res.status(401).json({ error: "Invalid credentials" });
+    return;
+  }
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    res.status(401).json({ error: "Invalid credentials" });
+    return;
+  }
+
+  const token = signToken({ userId: user.id, email: user.email, role: user.role });
+  res.json({
+    token,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, department: user.department, createdAt: user.createdAt.toISOString() },
+  });
+});
+
+router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.userId));
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  res.json({ id: user.id, name: user.name, email: user.email, role: user.role, department: user.department, createdAt: user.createdAt.toISOString() });
+});
+
+export default router;
+
+================================================================================
+FILE: artifacts/api-server/src/routes/judgments.ts
+================================================================================
+import { Router, type IRouter } from "express";
+import path from "path";
+import fs from "fs";
+import multer from "multer";
+import { db, judgmentsTable, extractionsTable, actionPlansTable, usersTable } from "@workspace/db";
+import { eq, desc, and, like, SQL } from "drizzle-orm";
+import { ListJudgmentsQueryParams, GetJudgmentParams, RetryJudgmentParams } from "@workspace/api-zod";
+import { requireAuth, requireRole } from "../lib/auth";
+import { runProcessingPipeline } from "../lib/pipeline";
+import { logger } from "../lib/logger";
+
+const UPLOADS_DIR = path.resolve("uploads");
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
+  filename: (_req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `${unique}-${file.originalname}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf") cb(null, true);
+    else cb(new Error("Only PDF files are allowed"));
+  },
+});
+
+const router: IRouter = Router();
+
+router.get("/judgments", requireAuth, async (req, res): Promise<void> => {
+  const parsed = ListJudgmentsQueryParams.safeParse(req.query);
+  const page = parsed.success ? (parsed.data.page ?? 1) : 1;
+  const limit = parsed.success ? (parsed.data.limit ?? 20) : 20;
+  const statusFilter = parsed.success ? parsed.data.status : undefined;
+
+  const conditions: SQL[] = [];
+  if (statusFilter) {
+    conditions.push(eq(judgmentsTable.status, statusFilter as "PENDING" | "PROCESSING" | "EXTRACTED" | "VERIFIED" | "REJECTED" | "EXTRACTION_FAILED"));
+  }
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+  const offset = (page - 1) * limit;
+
+  const [rows, totalRows] = await Promise.all([
+    db.select().from(judgmentsTable)
+      .where(whereClause)
+      .orderBy(desc(judgmentsTable.uploadedAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ id: judgmentsTable.id }).from(judgmentsTable).where(whereClause),
+  ]);
+
+  res.json({
+    judgments: rows.map(j => ({
+      ...j,
+      uploadedAt: j.uploadedAt.toISOString(),
+    })),
+    total: totalRows.length,
+    page,
+    limit,
+  });
+});
+
+router.post("/judgments/upload", requireAuth, requireRole("UPLOADER", "REVIEWER"), (req, res, next) => {
+  upload.single("file")(req, res, async (err) => {
+    if (err) {
+      if (err.message?.includes("size")) {
+        res.status(400).json({ error: "File too large. Maximum size is 50MB." });
+      } else {
+        res.status(400).json({ error: err.message || "Upload failed" });
+      }
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: "No file uploaded" });
+      return;
+    }
+
+    const { caseNumber, courtName } = req.body as { caseNumber?: string; courtName?: string };
+
+    try {
+      const [judgment] = await db.insert(judgmentsTable).values({
+        caseNumber: caseNumber || null,
+        courtName: courtName || null,
+        pdfPath: req.file.path,
+        pdfOriginalName: req.file.originalname,
+        uploadedBy: req.user!.userId,
+        status: "PENDING",
+      }).returning();
+
+      // Trigger async processing (don't await)
+      runProcessingPipeline(judgment.id).catch((pipelineErr) => {
+        logger.error({ err: pipelineErr, judgmentId: judgment.id }, "Pipeline failed");
+      });
+
+      res.status(201).json({
+        ...judgment,
+        uploadedAt: judgment.uploadedAt.toISOString(),
+      });
+    } catch (insertErr) {
+      logger.error({ err: insertErr }, "Failed to insert judgment");
+      next(insertErr);
+    }
+  });
+});
+
+router.get("/judgments/:id", requireAuth, async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, id));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  const [extraction] = await db.select().from(extractionsTable).where(eq(extractionsTable.judgmentId, id));
+  const [actionPlan] = await db.select().from(actionPlansTable).where(eq(actionPlansTable.judgmentId, id));
+  const [uploader] = await db.select().from(usersTable).where(eq(usersTable.id, judgment.uploadedBy));
+
+  res.json({
+    judgment: { ...judgment, uploadedAt: judgment.uploadedAt.toISOString() },
+    extraction: extraction ? { ...extraction, extractedAt: extraction.extractedAt.toISOString() } : undefined,
+    actionPlan: actionPlan ? { ...actionPlan, generatedAt: actionPlan.generatedAt.toISOString() } : undefined,
+    uploadedByUser: uploader ? { id: uploader.id, name: uploader.name, email: uploader.email, role: uploader.role, department: uploader.department, createdAt: uploader.createdAt.toISOString() } : undefined,
+  });
+});
+
+router.get("/judgments/:id/pdf", async (req, res): Promise<void> => {
+  // Iframes cannot send Authorization headers, so accept token via query param too
+  const authHeader = req.headers.authorization;
+  const queryToken = typeof req.query.token === "string" ? req.query.token : null;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : queryToken;
+
+  if (!token) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+  try {
+    const { verifyToken } = await import("../lib/auth.js");
+    verifyToken(token);
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+    return;
+  }
+
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, id));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  if (!fs.existsSync(judgment.pdfPath)) {
+    res.status(404).json({ error: "PDF file not found" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${judgment.pdfOriginalName ?? "judgment.pdf"}"`);
+  fs.createReadStream(judgment.pdfPath).pipe(res);
+});
+
+router.post("/judgments/:id/retry", requireAuth, requireRole("UPLOADER", "REVIEWER"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, id));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  if (!["EXTRACTION_FAILED", "PENDING"].includes(judgment.status)) {
+    res.status(400).json({ error: "Can only retry failed or pending judgments" });
+    return;
+  }
+
+  await db.update(judgmentsTable).set({ status: "PENDING", errorMessage: null }).where(eq(judgmentsTable.id, id));
+
+  runProcessingPipeline(id).catch((err) => {
+    logger.error({ err, judgmentId: id }, "Retry pipeline failed");
+  });
+
+  const [updated] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, id));
+  res.json({ ...updated, uploadedAt: updated!.uploadedAt.toISOString() });
+});
+
+export default router;
+
+================================================================================
+FILE: artifacts/api-server/src/routes/verify.ts
+================================================================================
+import { Router, type IRouter } from "express";
+import { db, judgmentsTable, extractionsTable, actionPlansTable, verificationRecordsTable, dashboardEntriesTable, usersTable } from "@workspace/db";
+import { eq, desc } from "drizzle-orm";
+import { EditJudgmentBody, EditJudgmentParams, RejectJudgmentBody, RejectJudgmentParams, ApproveJudgmentParams, GetVerifyDetailParams } from "@workspace/api-zod";
+import { requireAuth, requireRole } from "../lib/auth";
+import { logger } from "../lib/logger";
+
+const router: IRouter = Router();
+
+router.get("/verify/queue", requireAuth, requireRole("REVIEWER", "UPLOADER"), async (req, res): Promise<void> => {
+  const extracted = await db.select({
+    id: judgmentsTable.id,
+    caseNumber: judgmentsTable.caseNumber,
+    courtName: judgmentsTable.courtName,
+    uploadedAt: judgmentsTable.uploadedAt,
+    status: judgmentsTable.status,
+    uploadedBy: judgmentsTable.uploadedBy,
+  })
+    .from(judgmentsTable)
+    .where(eq(judgmentsTable.status, "EXTRACTED"))
+    .orderBy(desc(judgmentsTable.uploadedAt));
+
+  const results = await Promise.all(
+    extracted.map(async (j) => {
+      const [extraction] = await db.select({ caseTitle: extractionsTable.caseTitle, aiConfidenceScore: extractionsTable.aiConfidenceScore })
+        .from(extractionsTable).where(eq(extractionsTable.judgmentId, j.id));
+      const [uploader] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, j.uploadedBy));
+      return {
+        id: j.id,
+        caseNumber: j.caseNumber,
+        courtName: j.courtName,
+        uploadedAt: j.uploadedAt.toISOString(),
+        status: j.status,
+        aiConfidenceScore: extraction?.aiConfidenceScore ?? null,
+        caseTitle: extraction?.caseTitle ?? null,
+        uploadedByName: uploader?.name ?? null,
+      };
+    })
+  );
+
+  res.json(results);
+});
+
+router.get("/verify/:judgmentId", requireAuth, requireRole("REVIEWER", "UPLOADER"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.judgmentId) ? req.params.judgmentId[0] : req.params.judgmentId;
+  const judgmentId = parseInt(raw, 10);
+  if (isNaN(judgmentId)) { res.status(400).json({ error: "Invalid judgmentId" }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, judgmentId));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  const [extraction] = await db.select().from(extractionsTable).where(eq(extractionsTable.judgmentId, judgmentId));
+  const [actionPlan] = await db.select().from(actionPlansTable).where(eq(actionPlansTable.judgmentId, judgmentId));
+
+  res.json({
+    judgment: { ...judgment, uploadedAt: judgment.uploadedAt.toISOString() },
+    extraction: extraction ? { ...extraction, extractedAt: extraction.extractedAt.toISOString() } : undefined,
+    actionPlan: actionPlan ? { ...actionPlan, generatedAt: actionPlan.generatedAt.toISOString() } : undefined,
+    pdfUrl: `/api/judgments/${judgmentId}/pdf`,
+  });
+});
+
+async function createDashboardEntry(judgmentId: number, verificationId: number, extraction: Record<string, unknown> | null, actionPlan: Record<string, unknown> | null): Promise<void> {
+  const e = extraction as Record<string, unknown> | null;
+  const a = actionPlan as Record<string, unknown> | null;
+
+  const keyActions = Array.isArray(a?.actionItems) ? a.actionItems : [];
+  const importantDates: Record<string, unknown>[] = [];
+  if (a?.appealDeadline) importantDates.push({ label: "Appeal Deadline", date: a.appealDeadline });
+  if (e?.dateOfOrder) importantDates.push({ label: "Date of Order", date: e.dateOfOrder });
+
+  const depts = Array.isArray(a?.responsibleDepartments) ? a.responsibleDepartments : [];
+  const dept = depts.length > 0 ? String(depts[0]) : null;
+
+  await db.insert(dashboardEntriesTable).values({
+    verificationId,
+    judgmentId,
+    department: dept,
+    caseNumber: e?.caseNumber ? String(e.caseNumber) : null,
+    caseTitle: e?.caseTitle ? String(e.caseTitle) : null,
+    courtName: e?.courtName ? String(e.courtName) : null,
+    dateOfOrder: e?.dateOfOrder ? String(e.dateOfOrder) : null,
+    priorityLevel: String(a?.priorityLevel ?? "MEDIUM"),
+    complianceRequired: Boolean(a?.complianceRequired),
+    appealConsidering: Boolean(a?.appealConsideration),
+    appealDeadline: a?.appealDeadline ? String(a.appealDeadline) : null,
+    keyActions,
+    importantDates,
+    status: "ACTIVE",
+  });
+}
+
+router.post("/verify/:judgmentId/approve", requireAuth, requireRole("REVIEWER"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.judgmentId) ? req.params.judgmentId[0] : req.params.judgmentId;
+  const judgmentId = parseInt(raw, 10);
+  if (isNaN(judgmentId)) { res.status(400).json({ error: "Invalid judgmentId" }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, judgmentId));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  const [extraction] = await db.select().from(extractionsTable).where(eq(extractionsTable.judgmentId, judgmentId));
+  const [actionPlan] = await db.select().from(actionPlansTable).where(eq(actionPlansTable.judgmentId, judgmentId));
+
+  const [record] = await db.insert(verificationRecordsTable).values({
+    judgmentId,
+    extractionId: extraction?.id ?? null,
+    actionPlanId: actionPlan?.id ?? null,
+    reviewedBy: req.user!.userId,
+    status: "APPROVED",
+    reviewerNotes: null,
+  }).returning();
+
+  await db.update(judgmentsTable).set({ status: "VERIFIED" }).where(eq(judgmentsTable.id, judgmentId));
+
+  await createDashboardEntry(judgmentId, record.id, extraction as unknown as Record<string, unknown>, actionPlan as unknown as Record<string, unknown>);
+
+  res.json({ ...record, reviewedAt: record.reviewedAt.toISOString() });
+});
+
+router.post("/verify/:judgmentId/edit", requireAuth, requireRole("REVIEWER"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.judgmentId) ? req.params.judgmentId[0] : req.params.judgmentId;
+  const judgmentId = parseInt(raw, 10);
+  if (isNaN(judgmentId)) { res.status(400).json({ error: "Invalid judgmentId" }); return; }
+
+  const parsed = EditJudgmentBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, judgmentId));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  const [extraction] = await db.select().from(extractionsTable).where(eq(extractionsTable.judgmentId, judgmentId));
+  const [actionPlan] = await db.select().from(actionPlansTable).where(eq(actionPlansTable.judgmentId, judgmentId));
+
+  const [record] = await db.insert(verificationRecordsTable).values({
+    judgmentId,
+    extractionId: extraction?.id ?? null,
+    actionPlanId: actionPlan?.id ?? null,
+    reviewedBy: req.user!.userId,
+    status: "EDITED",
+    reviewerNotes: parsed.data.reviewerNotes ?? null,
+    editedExtraction: parsed.data.editedExtraction as Record<string, unknown>,
+    editedActionPlan: parsed.data.editedActionPlan as Record<string, unknown>,
+  }).returning();
+
+  await db.update(judgmentsTable).set({ status: "VERIFIED" }).where(eq(judgmentsTable.id, judgmentId));
+
+  await createDashboardEntry(
+    judgmentId,
+    record.id,
+    { ...(extraction ?? {}), ...parsed.data.editedExtraction } as Record<string, unknown>,
+    { ...(actionPlan ?? {}), ...parsed.data.editedActionPlan } as Record<string, unknown>
+  );
+
+  res.json({ ...record, reviewedAt: record.reviewedAt.toISOString() });
+});
+
+router.post("/verify/:judgmentId/reject", requireAuth, requireRole("REVIEWER"), async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.judgmentId) ? req.params.judgmentId[0] : req.params.judgmentId;
+  const judgmentId = parseInt(raw, 10);
+  if (isNaN(judgmentId)) { res.status(400).json({ error: "Invalid judgmentId" }); return; }
+
+  const parsed = RejectJudgmentBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const [judgment] = await db.select().from(judgmentsTable).where(eq(judgmentsTable.id, judgmentId));
+  if (!judgment) { res.status(404).json({ error: "Not found" }); return; }
+
+  const [extraction] = await db.select().from(extractionsTable).where(eq(extractionsTable.judgmentId, judgmentId));
+  const [actionPlan] = await db.select().from(actionPlansTable).where(eq(actionPlansTable.judgmentId, judgmentId));
+
+  const [record] = await db.insert(verificationRecordsTable).values({
+    judgmentId,
+    extractionId: extraction?.id ?? null,
+    actionPlanId: actionPlan?.id ?? null,
+    reviewedBy: req.user!.userId,
+    status: "REJECTED",
+    reviewerNotes: parsed.data.reviewerNotes,
+  }).returning();
+
+  await db.update(judgmentsTable).set({ status: "REJECTED" }).where(eq(judgmentsTable.id, judgmentId));
+
+  res.json({ ...record, reviewedAt: record.reviewedAt.toISOString() });
+});
+
+export default router;
+
+================================================================================
+FILE: artifacts/api-server/src/routes/dashboard.ts
+================================================================================
+import { Router, type IRouter } from "express";
+import { db, dashboardEntriesTable, judgmentsTable, extractionsTable, actionPlansTable } from "@workspace/db";
+import { eq, desc, and, gte, lte, ilike, SQL, or } from "drizzle-orm";
+import { GetDashboardEntriesQueryParams, GetDashboardEntryParams, UpdateDashboardEntryStatusBody, UpdateDashboardEntryStatusParams } from "@workspace/api-zod";
+import { requireAuth } from "../lib/auth";
+
+const router: IRouter = Router();
+
+function serializeEntry(e: typeof dashboardEntriesTable.$inferSelect) {
+  return {
+    ...e,
+    createdAt: e.createdAt.toISOString(),
+    updatedAt: e.updatedAt.toISOString(),
+  };
+}
+
+router.get("/dashboard/entries", requireAuth, async (req, res): Promise<void> => {
+  const parsed = GetDashboardEntriesQueryParams.safeParse(req.query);
+  const page = parsed.success ? (parsed.data.page ?? 1) : 1;
+  const limit = parsed.success ? (parsed.data.limit ?? 50) : 50;
+  const offset = (page - 1) * limit;
+
+  const conditions: SQL[] = [];
+  if (parsed.success) {
+    const { department, priority, status, dateFrom, dateTo, search } = parsed.data;
+    if (department) conditions.push(eq(dashboardEntriesTable.department, department));
+    if (priority) conditions.push(eq(dashboardEntriesTable.priorityLevel, priority));
+    if (status) conditions.push(eq(dashboardEntriesTable.status, status as "ACTIVE" | "COMPLIED" | "APPEALED" | "CLOSED"));
+    if (search) {
+      conditions.push(
+        or(
+          ilike(dashboardEntriesTable.caseNumber, `%${search}%`),
+          ilike(dashboardEntriesTable.caseTitle, `%${search}%`),
+          ilike(dashboardEntriesTable.courtName, `%${search}%`)
+        ) as SQL
+      );
+    }
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [rows, all] = await Promise.all([
+    db.select().from(dashboardEntriesTable).where(where).orderBy(desc(dashboardEntriesTable.createdAt)).limit(limit).offset(offset),
+    db.select({ id: dashboardEntriesTable.id }).from(dashboardEntriesTable).where(where),
+  ]);
+
+  res.json({ entries: rows.map(serializeEntry), total: all.length, page, limit });
+});
+
+router.get("/dashboard/stats", requireAuth, async (req, res): Promise<void> => {
+  const [entries, judgments] = await Promise.all([
+    db.select().from(dashboardEntriesTable),
+    db.select().from(judgmentsTable),
+  ]);
+
+  const byPriority: Record<string, number> = { LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 };
+  const byDepartment: Record<string, number> = {};
+  const byStatus: Record<string, number> = { ACTIVE: 0, COMPLIED: 0, APPEALED: 0, CLOSED: 0 };
+
+  const now = new Date();
+  const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+  const upcomingDeadlines: Record<string, unknown>[] = [];
+  const recentActivity: Record<string, unknown>[] = [];
+
+  for (const e of entries) {
+    byPriority[e.priorityLevel] = (byPriority[e.priorityLevel] ?? 0) + 1;
+    byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
+    if (e.department) byDepartment[e.department] = (byDepartment[e.department] ?? 0) + 1;
+    if (e.appealDeadline) {
+      const d = new Date(e.appealDeadline);
+      if (d >= now && d <= in30Days) {
+        const daysLeft = Math.ceil((d.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+        upcomingDeadlines.push({ id: e.id, caseNumber: e.caseNumber, caseTitle: e.caseTitle, deadline: e.appealDeadline, daysLeft, priorityLevel: e.priorityLevel });
+      }
+    }
+  }
+
+  const recentEntries = [...entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 5);
+  for (const e of recentEntries) {
+    recentActivity.push({ id: e.id, caseNumber: e.caseNumber, caseTitle: e.caseTitle, priorityLevel: e.priorityLevel, createdAt: e.createdAt.toISOString(), status: e.status });
+  }
+
+  const pendingVerification = judgments.filter(j => j.status === "EXTRACTED").length;
+  const processingCount = judgments.filter(j => j.status === "PROCESSING" || j.status === "PENDING").length;
+
+  res.json({
+    total: entries.length,
+    byPriority,
+    byDepartment,
+    byStatus,
+    upcomingDeadlines: upcomingDeadlines.sort((a: Record<string, unknown>, b: Record<string, unknown>) => Number(a.daysLeft) - Number(b.daysLeft)),
+    pendingVerification,
+    processingCount,
+    recentActivity,
+  });
+});
+
+router.get("/dashboard/entries/:id", requireAuth, async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [entry] = await db.select().from(dashboardEntriesTable).where(eq(dashboardEntriesTable.id, id));
+  if (!entry) { res.status(404).json({ error: "Not found" }); return; }
+
+  res.json(serializeEntry(entry));
+});
+
+router.patch("/dashboard/entries/:id/status", requireAuth, async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const parsed = UpdateDashboardEntryStatusBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const [entry] = await db.update(dashboardEntriesTable)
+    .set({ status: parsed.data.status as "ACTIVE" | "COMPLIED" | "APPEALED" | "CLOSED" })
+    .where(eq(dashboardEntriesTable.id, id))
+    .returning();
+
+  if (!entry) { res.status(404).json({ error: "Not found" }); return; }
+
+  res.json(serializeEntry(entry));
+});
+
+export default router;
+
+================================================================================
+FILE: lib/db/src/index.ts
+================================================================================
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
+import * as schema from "./schema";
+
+const { Pool } = pg;
+
+if (!process.env.DATABASE_URL) {
+  throw new Error(
+    "DATABASE_URL must be set. Did you forget to provision a database?",
+  );
+}
+
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const db = drizzle(pool, { schema });
+
+export * from "./schema";
+
+================================================================================
+FILE: lib/db/src/schema/users.ts
+================================================================================
+import { pgTable, text, serial, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+
+export const userRoleEnum = pgEnum("user_role", ["UPLOADER", "REVIEWER", "VIEWER"]);
+
+export const usersTable = pgTable("users", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  role: userRoleEnum("role").notNull().default("VIEWER"),
+  department: text("department"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true });
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof usersTable.$inferSelect;
+
+================================================================================
+FILE: lib/db/src/schema/judgments.ts
+================================================================================
+import { pgTable, text, serial, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { usersTable } from "./users";
+
+export const judgmentStatusEnum = pgEnum("judgment_status", [
+  "PENDING",
+  "PROCESSING",
+  "EXTRACTED",
+  "VERIFIED",
+  "REJECTED",
+  "EXTRACTION_FAILED",
+]);
+
+export const judgmentsTable = pgTable("judgments", {
+  id: serial("id").primaryKey(),
+  caseNumber: text("case_number"),
+  courtName: text("court_name"),
+  pdfPath: text("pdf_path").notNull(),
+  pdfOriginalName: text("pdf_original_name"),
+  uploadedBy: integer("uploaded_by").notNull().references(() => usersTable.id),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+  status: judgmentStatusEnum("status").notNull().default("PENDING"),
+  errorMessage: text("error_message"),
+});
+
+export const insertJudgmentSchema = createInsertSchema(judgmentsTable).omit({ id: true, uploadedAt: true });
+export type InsertJudgment = z.infer<typeof insertJudgmentSchema>;
+export type Judgment = typeof judgmentsTable.$inferSelect;
+
+================================================================================
+FILE: lib/db/src/schema/extractions.ts
+================================================================================
+import { pgTable, text, serial, timestamp, integer, real, jsonb } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { judgmentsTable } from "./judgments";
+
+export const extractionsTable = pgTable("extractions", {
+  id: serial("id").primaryKey(),
+  judgmentId: integer("judgment_id").notNull().references(() => judgmentsTable.id),
+  caseTitle: text("case_title"),
+  caseNumber: text("case_number"),
+  courtName: text("court_name"),
+  dateOfOrder: text("date_of_order"),
+  bench: text("bench").array(),
+  petitionerName: text("petitioner_name"),
+  petitionerAdvocate: text("petitioner_advocate"),
+  respondentName: text("respondent_name"),
+  respondentAdvocate: text("respondent_advocate"),
+  keyDirections: jsonb("key_directions").$type<Array<Record<string, unknown>>>().default([]),
+  timelines: jsonb("timelines").$type<Array<Record<string, unknown>>>().default([]),
+  relevantActs: text("relevant_acts").array(),
+  summaryText: text("summary_text"),
+  rawExtractedText: text("raw_extracted_text"),
+  aiConfidenceScore: real("ai_confidence_score"),
+  confidenceNotes: text("confidence_notes"),
+  extractionModel: text("extraction_model"),
+  ocrUsed: text("ocr_used"),
+  extractedAt: timestamp("extracted_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const insertExtractionSchema = createInsertSchema(extractionsTable).omit({ id: true, extractedAt: true });
+export type InsertExtraction = z.infer<typeof insertExtractionSchema>;
+export type Extraction = typeof extractionsTable.$inferSelect;
+
+================================================================================
+FILE: lib/db/src/schema/action_plans.ts
+================================================================================
+import { pgTable, text, serial, timestamp, integer, boolean, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { judgmentsTable } from "./judgments";
+import { extractionsTable } from "./extractions";
+
+export const priorityLevelEnum = pgEnum("priority_level", ["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+
+export const actionPlansTable = pgTable("action_plans", {
+  id: serial("id").primaryKey(),
+  judgmentId: integer("judgment_id").notNull().references(() => judgmentsTable.id),
+  extractionId: integer("extraction_id").references(() => extractionsTable.id),
+  complianceRequired: boolean("compliance_required").notNull().default(false),
+  complianceRationale: text("compliance_rationale"),
+  appealConsideration: boolean("appeal_consideration").notNull().default(false),
+  appealRationale: text("appeal_rationale"),
+  appealLimitationDays: integer("appeal_limitation_days"),
+  appealDeadline: text("appeal_deadline"),
+  responsibleDepartments: text("responsible_departments").array(),
+  priorityLevel: priorityLevelEnum("priority_level").notNull().default("MEDIUM"),
+  priorityRationale: text("priority_rationale"),
+  actionItems: jsonb("action_items").$type<Array<Record<string, unknown>>>().default([]),
+  natureOfAction: text("nature_of_action"),
+  aiRationale: text("ai_rationale"),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const insertActionPlanSchema = createInsertSchema(actionPlansTable).omit({ id: true, generatedAt: true });
+export type InsertActionPlan = z.infer<typeof insertActionPlanSchema>;
+export type ActionPlan = typeof actionPlansTable.$inferSelect;
+
+================================================================================
+FILE: lib/db/src/schema/verification_records.ts
+================================================================================
+import { pgTable, text, serial, timestamp, integer, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { judgmentsTable } from "./judgments";
+import { usersTable } from "./users";
+
+export const verificationStatusEnum = pgEnum("verification_status", ["APPROVED", "EDITED", "REJECTED"]);
+
+export const verificationRecordsTable = pgTable("verification_records", {
+  id: serial("id").primaryKey(),
+  judgmentId: integer("judgment_id").notNull().references(() => judgmentsTable.id),
+  extractionId: integer("extraction_id"),
+  actionPlanId: integer("action_plan_id"),
+  reviewedBy: integer("reviewed_by").notNull().references(() => usersTable.id),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull().defaultNow(),
+  status: verificationStatusEnum("status").notNull(),
+  reviewerNotes: text("reviewer_notes"),
+  editedExtraction: jsonb("edited_extraction").$type<Record<string, unknown>>(),
+  editedActionPlan: jsonb("edited_action_plan").$type<Record<string, unknown>>(),
+});
+
+export const insertVerificationSchema = createInsertSchema(verificationRecordsTable).omit({ id: true, reviewedAt: true });
+export type InsertVerification = z.infer<typeof insertVerificationSchema>;
+export type VerificationRecord = typeof verificationRecordsTable.$inferSelect;
+
+================================================================================
+FILE: lib/db/src/schema/dashboard_entries.ts
+================================================================================
+import { pgTable, text, serial, timestamp, integer, boolean, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { judgmentsTable } from "./judgments";
+import { verificationRecordsTable } from "./verification_records";
+
+export const dashboardStatusEnum = pgEnum("dashboard_status", ["ACTIVE", "COMPLIED", "APPEALED", "CLOSED"]);
+
+export const dashboardEntriesTable = pgTable("dashboard_entries", {
+  id: serial("id").primaryKey(),
+  verificationId: integer("verification_id").notNull().references(() => verificationRecordsTable.id),
+  judgmentId: integer("judgment_id").notNull().references(() => judgmentsTable.id),
+  department: text("department"),
+  caseNumber: text("case_number"),
+  caseTitle: text("case_title"),
+  courtName: text("court_name"),
+  dateOfOrder: text("date_of_order"),
+  priorityLevel: text("priority_level").notNull().default("MEDIUM"),
+  complianceRequired: boolean("compliance_required").notNull().default(false),
+  appealConsidering: boolean("appeal_considering").notNull().default(false),
+  appealDeadline: text("appeal_deadline"),
+  keyActions: jsonb("key_actions").$type<Array<Record<string, unknown>>>().default([]),
+  importantDates: jsonb("important_dates").$type<Array<Record<string, unknown>>>().default([]),
+  status: dashboardStatusEnum("status").notNull().default("ACTIVE"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+});
+
+export const insertDashboardEntrySchema = createInsertSchema(dashboardEntriesTable).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertDashboardEntry = z.infer<typeof insertDashboardEntrySchema>;
+export type DashboardEntry = typeof dashboardEntriesTable.$inferSelect;
+
+================================================================================
+FILE: lib/integrations-anthropic-ai/src/client.ts
+================================================================================
+import Anthropic from "@anthropic-ai/sdk";
+
+if (!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL) {
+  throw new Error(
+    "AI_INTEGRATIONS_ANTHROPIC_BASE_URL must be set. Did you forget to provision the Anthropic AI integration?",
+  );
+}
+
+if (!process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY) {
+  throw new Error(
+    "AI_INTEGRATIONS_ANTHROPIC_API_KEY must be set. Did you forget to provision the Anthropic AI integration?",
+  );
+}
+
+export const anthropic = new Anthropic({
+  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+});
+
+================================================================================
+FILE: lib/api-spec/openapi.yaml  (API Contract — full spec in separate section above)
+================================================================================
+[See openapi.yaml — defines all routes, request/response schemas for:
+  GET  /healthz
+  POST /auth/login
+  POST /auth/register
+  GET  /auth/me
+  GET  /judgments
+  POST /judgments/upload
+  GET  /judgments/:id
+  POST /judgments/:id/retry
+  GET  /verify/queue
+  GET  /verify/:judgmentId
+  POST /verify/:judgmentId/approve
+  POST /verify/:judgmentId/edit
+  POST /verify/:judgmentId/reject
+  GET  /dashboard/entries
+  GET  /dashboard/stats
+  GET  /dashboard/entries/:id
+  PATCH /dashboard/entries/:id/status
+]
+
+================================================================================
+END OF BACKEND SOURCE CODE
+================================================================================
